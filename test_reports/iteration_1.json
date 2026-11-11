@@ -1,0 +1,54 @@
+{
+  "summary": "First full run. Backend: 13 pytest cases covering auth/password gate, login by agent ID and email, role isolation, users/sessions/reset/revoke/deactivate, master data, settings, case filters, import, draft/submit validation (missing fields, blocked words, GPS, photos, declaration, min call attempts), evidence upload + token file access, review (return needs comment, approve, escalate, exception, inconclusive), resubmit versioning, PDF/DOCX/XLSX/MIS exports, dashboard, map, audit. 11/13 pass; 2 real bugs (duplicate-photo flag wiped on submit; non-xlsx import gives 500). Frontend web at 1280px (admin): login, dashboard KPIs, all 7 sidebar navs, status chip filter, search, assign modal, review approve, return with empty comment blocked then return with comment, export buttons, create user modal, add client/branch, audit list all work. Frontend mobile at 390x844 (agent): AGT102 forced change-password (mismatch blocked), home KPIs + sync badge, Cases filter chips, case detail, Start Verification, report form with 23 inputs, 3 photo slots, GPS, declaration, Save Draft toast, Submit shows submission-problems list, GPS permission state with Open Settings, camera permission screen. Problems found are minor UI issues plus missing back navigation. No deprecated Expo packages found (no expo-av, expo-barcode-scanner or expo-background-fetch).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/reports/case/{id}/submit", "issue": "The 'duplicate_photo_cross_case' and 'same_evidence_reused' flags are added to case.flags at upload time (evidence_routes.py:61). On submit, reports_routes.py:187 does $set flags = compute_flags(...), and compute_flags never looks at evidence. So the duplicate-photo flag is erased as soon as the agent submits and the supervisor never sees it. Reproduced: flags were ['duplicate_photo_cross_case'] before submit and ['multiple_same_place_time','no_visit_started'] after.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/cases/import", "issue": "Uploading a file that is not xlsx returns 500. load_workbook at cases_routes.py:108 is not wrapped in try/except. It should return 400 'Invalid Excel file'."},
+      {"endpoint": "POST /api/reports/{id}/review", "issue": "reports_routes.py:266 accepts reports in status 'returned'. An admin can approve or mark exception on a report that was returned and never corrected or resubmitted. Likely only 'submitted' and 'under_review' should be allowed."},
+      {"endpoint": "POST /api/reports/case/{id}/submit", "issue": "When a draft exists, submit creates version = draft.version + 1 and marks the draft 'superseded'. Version numbers skip (draft v1 superseded, first submission v2), which looks odd in the 'Report Versions' list and in exports. Consider promoting the draft instead."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TextField default placeholder", "issue": "src/components/fields.tsx:52 falls back to the placeholder 'Optional' when the required prop is not passed. Mandatory fields therefore show 'Optional': login identifier and password, the 'Correction Comments (mandatory)' box in the return modal, Branch Name on Master Data, and others.", "testID": "login-identifier-input, review-comment-input, branch-name-input", "priority": "MEDIUM"},
+      {"component": "Agent case detail / report screens", "issue": "No back button. headerShown:false is set globally (app/_layout.tsx:26) and case/[id].tsx and report/[caseId].tsx have no custom back control. On web and Android without a gesture, the agent cannot return to the list from the UI.", "testID": "case-detail-screen, report-screen", "priority": "HIGH"},
+      {"component": "Report screen header", "issue": "At 390px the status pill to the right of the long title (e.g. 'Applicant Residence Verification') is pushed off-screen and clipped. Also, after Save Draft it still reads 'Assigned' although the backend moved the case to in_progress (stale query; invalidate it after the draft saves).", "testID": "report-case-status", "priority": "MEDIUM"},
+      {"component": "Admin review screen status", "issue": "GET /reports/{id} moves the case to under_review, but the header pill still shows 'Submitted' while the versions list shows 'v1 · under_review'. Refetch the case after the review payload loads.", "testID": "review-case-status", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Agent cases filter chips", "issue": "After switching chips, the previous filter's results stay on screen until the refetch finishes, about 1.5s. A Returned case appeared under 'Assigned' and 'Due Today' even though the API returned none. The data is correct after about 4s. Show a loading state or clear the list when the filter key changes.", "affected_testIDs": ["cases-filter-assigned", "cases-filter-today"]}
+    ],
+    "design_issues": [
+      {"screen": "Agent case detail", "issues": ["Long values in the label/value rows (e.g. Client Case ID 'TEST_residence_applicant_808074') run past the card's right edge. Add flexShrink:1 and textAlign right with wrapping."]},
+      {"screen": "Agent home", "issues": ["The KPI grid uses fixed-width cards of about 140px in 2 columns, leaving about 70px empty on the right at 390px. Use 48% width or flex:1."]},
+      {"screen": "Admin dashboard", "issues": ["The Agent Productivity list shows a '-' row for unassigned cases. Label it 'Unassigned' or exclude it."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_checksphere_api.py", "/app/backend/tests/prep_ui_data.py", "/app/backend/tests/cleanup_test_data.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "HIGH: Keep the duplicate-photo flags on submit. In submit_report, merge the existing case flags 'duplicate_photo_cross_case' and 'same_evidence_reused' (or recompute them from evidence sha256) into the computed flags, and store them on the report too.",
+    "HIGH: Add a back button or header to the agent case detail and report screens (and the admin case review screen).",
+    "Wrap load_workbook in /cases/import with try/except and return 400.",
+    "Restrict the review endpoint to report statuses submitted and under_review.",
+    "Pass required to TextField on mandatory inputs, or change the default placeholder, so required fields don't say 'Optional'.",
+    "Fix the clipped status pill on the report screen and the overflowing values on case detail. Invalidate the case and report queries after Save Draft and after the review payload loads.",
+    "Agent cases list: show a loader or clear stale items when the filter changes (check react-query placeholderData/keepPreviousData).",
+    "Optional: add DELETE or archive for clients and branches. Test clients and branches can't be cleaned up now."
+  ],
+  "critical_code_review_comments": [
+    "compute_flags replaces case.flags wholesale with $set, so any flag added outside compute_flags is lost on every submit.",
+    "Version numbering is not continuous when drafts exist, because the draft and the submitted report are separate documents.",
+    "Admin layout keeps earlier stack screens mounted on web, so testIDs like admin-audit-screen appear twice in the DOM. This doesn't affect function but makes selectors ambiguous.",
+    "No deprecated Expo packages (expo-av, expo-barcode-scanner, expo-background-fetch). SafeAreaView is not imported from react-native. The report screen uses react-native-keyboard-controller and safe-area insets."
+  ],
+  "updated_files": ["/app/backend/tests/test_checksphere_api.py", "/app/backend/tests/prep_ui_data.py", "/app/backend/tests/cleanup_test_data.py"],
+  "success_rate": {"backend": "85% (11/13; 2 real bugs)", "frontend": "~90% (all requested flows work; UI/navigation polish issues)"},
+  "seed_data_creation": "Created TEST_ users (all deactivated after the run), TEST_ cases assigned to those users (soft-deleted by id), and the TEST_ clients 'TEST_Client_<sfx>' and 'TEST_WebClient_<sfx>' with branches 'TEST_Br' and 'TEST_WebBranch_<sfx>' (TESTCity/TESTState). These clients and branches cannot be deleted because there is no delete endpoint, and TESTCity/TESTState now appear in Regions. test_import re-uploaded the import template, which may have created extra unassigned cases from its sample rows. AGT102's password was changed during the UI test and then reset to Agent@12345 via admin reset, so the forced change is pending again and the creds file is still valid. Seeded cases were not modified.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_checksphere_api.py (pytest.ini uses xdist, so module fixtures run per worker). The tests create their own TEST_ agents and supervisor and never touch the seeded creds. Afterwards run tests/cleanup_test_data.py, which resets AGT102 and deactivates TEST_ users and deletes their cases. Call results allowed: Confirmed, Busy, No Response, Switched Off, Call Later, Invalid Number, Refused, Other. PUT /settings body is {updates:{...}}. Select options have testID select-option-<slug>. Use .last for admin screen testIDs (duplicates in DOM).",
+  "rca_of_issue": "Duplicate photo flag: evidence_routes.upload_evidence does $addToSet flags on the case. reports_routes.submit_report computes flags only from GPS, visit and travel, then does $set {'flags': flags} on the case (line 187), which overwrites the upload-time flags. Reproduce: upload the same image bytes to two cases, then GET case 2 (flag present), submit case 2, then GET case 2 (flag gone). Fix: flags = sorted(set(flags) | {f for f in case.get('flags', []) if f in ('duplicate_photo_cross_case','same_evidence_reused')})."
+}

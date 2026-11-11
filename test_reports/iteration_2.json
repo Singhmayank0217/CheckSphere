@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 2 retest. Backend: 17/17 pytest pass, including 4 new retests: duplicate-photo flag on both the case and the report after submit, review on a returned report gives 400, draft followed by first submit is version 1 with no leftover draft, and dashboard stats. Non-xlsx import gives 400. Frontend at 390x844 as AGT102: forced password change works. Back buttons work: case-detail-back-btn goes to /home or /cases, and report-back-btn goes to the case detail. Report inputs show 'Required' or empty, and the page has no 'Optional' text. The status pill is not clipped (x 296-374). The KPI grid fills the width (2x175px). Save Draft changes the pill from Assigned to In Progress, on both the report screen and the case detail. Admin at 1920x1080: login and dashboard work, Agent Productivity shows 'Unassigned', the cases list loads, opening a submitted case shows Under Review, and Approve with a comment gives Approved with export buttons. MIS export (daily/weekly/monthly) returns 200 xlsx. One minor issue is left: on web, a long unbroken value (e.g. Client Case ID 'TEST_residence_applicant_599e5c') still runs past the case detail card's right padding. No deprecated Expo packages found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "DisplayRow (src/components/ui.tsx:68-78)", "issue": "Long values with no spaces (Client Case ID) run past the card's right padding on case detail at 390px. flex:1 does not wrap a long single token on web.", "testID": "case-detail-back-btn screen", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin case review timeline", "issues": ["Timeline entries show raw JSON metadata (e.g. {\"source\":\"manual\"}, {\"agent\":...,\"reason\":\"\"}). Format these as readable text.", "The action label says 'Report Approve'. It should be 'Report Approved'."]},
+      {"screen": "Admin toast", "issues": ["The success toast spans the whole width and covers the sidebar footer and the export buttons for a few seconds."]},
+      {"screen": "Agent case detail", "issues": ["The map preview is about 180px wide and centered, not full card width (cosmetic)."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_checksphere_api.py", "/app/backend/tests/prep_ui_iter2.py", "/app/backend/tests/prep_ui_data.py", "/app/backend/tests/cleanup_test_data.py", "/app/test_reports/pytest/pytest_iter2.xml"],
+  "action_items": [
+    "LOW: In DisplayRow, add minWidth:0 and, on web, wordBreak:'break-word' (or overflowWrap:'anywhere') to the value Text so long single tokens wrap inside the card.",
+    "LOW: Show timeline metadata as readable text instead of raw JSON, and rename 'Report Approve' to 'Report Approved'.",
+    "LOW (optional): On the admin web layout, keep the toast to the content area or make it narrower so it doesn't cover the sidebar and buttons."
+  ],
+  "critical_code_review_comments": [
+    "The admin case review screen ((admin)/cases/[id].tsx) has no BackHeader. That is fine on web because the sidebar is there, but there is no back button to the filtered cases list."
+  ],
+  "updated_files": ["/app/backend/tests/test_checksphere_api.py (added TestIteration2Retests)", "/app/backend/tests/prep_ui_iter2.py (new)"],
+  "success_rate": {"backend": "100%", "frontend": "100% of retest items (1 minor overflow left)"},
+  "seed_data_creation": "Created TEST_ users and cases only. cleanup_test_data.py deactivated the TEST_ users and deleted their cases by id. The TEST_ case for AGT102 (6af44b090ef6f7349f305192) was deleted by id. AGT102 password was reset to Agent@12345, so must_change_password=true again, as seeded. One seeded-style record changed: none.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_checksphere_api.py (uses xdist). Then run tests/cleanup_test_data.py. For UI data: prep_ui_iter2.py creates a TEST case for AGT102, and prep_ui_data.py creates a TEST agent with 2 submitted cases. The frontend URL is EXPO_PUBLIC_BACKEND_URL in frontend/.env. Agent cases are opened from the Cases tab by tapping the CSV id text. start-verification-btn opens the report. Use .last for admin testIDs.",
+  "rca_of_issue": "DisplayRow overflow: on react-native-web, a Text with flex:1 inside a row does not break a long token with no spaces, because CSS word-break defaults to normal."
+}

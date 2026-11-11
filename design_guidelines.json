@@ -1,0 +1,167 @@
+{
+  "app_name": "CheckSphere",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A precision-engineered verification and compliance platform built for field agents and bank supervisors with uncompromising trust and clarity.",
+  "color": {
+    "surface": "#F9F8F6",
+    "onSurface": "#1A1A18",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1A1A18",
+    "surfaceTertiary": "#F0EDE6",
+    "onSurfaceTertiary": "#595752",
+    "surfaceInverse": "#1A1A18",
+    "onSurfaceInverse": "#F9F8F6",
+    "brand": "#1F4E3D",
+    "brandPrimary": "#1F4E3D",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#326853",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E4EBE7",
+    "onBrandTertiary": "#1F4E3D",
+    "success": "#2E6930",
+    "onSuccess": "#FFFFFF",
+    "warning": "#9C6B14",
+    "onWarning": "#FFFFFF",
+    "error": "#9E2A2B",
+    "onError": "#FFFFFF",
+    "info": "#2B5278",
+    "onInfo": "#FFFFFF",
+    "border": "#E2DFD8",
+    "borderStrong": "#C7C2B6",
+    "divider": "#EFECE6",
+    "muted": "#73706A",
+    "onBrand": "#FFFFFF"
+  },
+  "typography": {
+    "displayFontFamily": "PlusJakartaSans",
+    "textFontFamily": "PlusJakartaSans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous touch targets, 16px padding on main containers, 8px gaps for structured data cards.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use frosted glass on sticky headers and bottom navigation over scrolling case lists"
+    ],
+    "dont's": [
+      "Never apply blur to form inputs or dense table cells"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Secure agent authentication with forced password change on first login.",
+      "states": {
+        "loading": "Authenticating credentials securely...",
+        "empty": "Enter Agent ID and password provided by CheckSphere admin.",
+        "error": "Invalid credentials or account suspended. Contact supervisor."
+      },
+      "layout": "Clean card container centered with botanical botanical deep green accent buttons and clear feedback."
+    },
+    {
+      "name": "Dashboard",
+      "purpose": "Field agent overview of assigned cases, due today, overdue, sync status, and quick stats.",
+      "states": {
+        "loading": "Loading assigned verification cases...",
+        "empty": "No cases assigned for today. Check supervisor dispatch queue.",
+        "error": "Failed to sync cases. Check connection or use offline mode."
+      },
+      "layout": "Sticky header with sync badge, status KPI counter cards, priority list of due verifications with geo-tag indicators."
+    },
+    {
+      "name": "CaseList",
+      "purpose": "Searchable and filterable list of all cases (assigned, drafts, returned, submitted).",
+      "states": {
+        "loading": "Fetching case queue...",
+        "empty": "No cases match the selected filter criteria.",
+        "error": "Unable to load case records. Tap to retry."
+      },
+      "layout": "Top segmented tabs, search bar with client/branch filters, vertical list of structured case cards with status pills."
+    },
+    {
+      "name": "CaseDetail",
+      "purpose": "Comprehensive view of applicant details, address, verification type, and report initiation.",
+      "states": {
+        "loading": "Loading verification parameters...",
+        "empty": "Case details not found.",
+        "error": "Failed to retrieve applicant data."
+      },
+      "layout": "Header banner with client badge, applicant profile card, address block with map preview button, and sticky Start Verification primary CTA."
+    },
+    {
+      "name": "FieldVerificationForm",
+      "purpose": "Structured verification report capturing GPS coordinates, mandatory in-app camera photos, remarks, and declaration.",
+      "states": {
+        "loading": "Initializing secure camera and GPS sensors...",
+        "empty": "Complete mandatory checklist items before submission.",
+        "error": "GPS lock required within 100 meters of target address."
+      },
+      "layout": "Step-by-step collapsible checklist sections (Residence/Office/KYC), GPS coordinate validation stamp, in-app camera capture slots (Exterior, Selfie, Document), and legal declaration toggle."
+    },
+    {
+      "name": "AdminWebDashboard",
+      "purpose": "Responsive web dashboard for supervisors and super admins with KPIs, map view, and audit trails.",
+      "states": {
+        "loading": "Aggregating MIS data across branches...",
+        "empty": "No verification records available for selected date range.",
+        "error": "Dashboard analytics service unavailable."
+      },
+      "layout": "Sidebar navigation, top KPI summary grid (Total, TAT, Approved, Exceptions), interactive map view with exception pins, and case review table with data masking."
+    }
+  ],
+  "images": {
+    "brand_logo": {
+      "url": "https://images.unsplash.com/photo-1497366754035-f200968a6e72?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBtb2Rlcm4lMjBvZmZpY2UlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzk0MzkyMDkyfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "CheckSphere professional verification corporate branding"
+    },
+    "hero_banner": {
+      "light": "https://images.unsplash.com/photo-1497366811353-6870744d04b2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBtb2Rlcm4lMjBvZmZpY2UlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzk0MzkyMDkyfDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1556761175-4b46a572b786?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBtb2Rlcm4lMjBvZmZpY2UlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzk0MzkyMDkyfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Secure corporate audit background"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Build CheckSphere as a secure, offline-first field verification app and responsive supervisor web dashboard in Expo React Native.",
+    "Enforce strict GPS geolocation capture and in-app camera mandatory evidence capture (gallery uploads blocked for photos).",
+    "Ensure all sensitive data (Aadhaar, PAN, Bank account numbers) are masked in UI views.",
+    "Implement forced password change on first agent login.",
+    "Provide robust offline drafts storage and automatic sync queue indicator.",
+    "Ensure sticky primary CTAs and generous touch targets across all mobile screens."
+  ]
+}
