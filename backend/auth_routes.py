@@ -17,6 +17,10 @@ class LoginIn(BaseModel):
     device_id: str = Field(default="unknown-device", max_length=200)
     device_model: str = Field(default="", max_length=200)
     platform: str = Field(default="", max_length=50)
+    expected_role: str | None = None
+
+
+ROLE_LABEL = {"agent": "Field Agent", "supervisor": "Supervisor", "super_admin": "Super Admin"}
 
 
 class ChangePasswordIn(BaseModel):
@@ -35,6 +39,13 @@ async def login(body: LoginIn, request: Request):
         raise HTTPException(401, "Invalid credentials")
     if u.get("disabled"):
         raise HTTPException(403, "Account is deactivated. Contact your administrator.")
+    if body.expected_role and body.expected_role != u.get("role"):
+        await core.audit(u, "login_wrong_portal", "user", str(u["_id"]), {"expected": body.expected_role}, request)
+        raise HTTPException(403, f"This is a {ROLE_LABEL.get(u.get('role'), u.get('role'))} account. "
+                                 f"Please use the {ROLE_LABEL.get(u.get('role'), '')} login.")
+    await core.db.users.update_one({"_id": u["_id"]}, {"$set": {
+        "last_login_at": core.now(), "last_login_ip": request.client.host if request.client else None,
+        "last_login_device": body.device_model}})
 
     sid = str(uuid.uuid4())
     t = core.now()

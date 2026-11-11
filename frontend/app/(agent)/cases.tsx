@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@/src/api";
 import { Empty, ErrorBox, Loading, PriorityPill, Screen, StatusPill } from "@/src/components/ui";
 import { TextField } from "@/src/components/fields";
+import { AgentTopBar } from "@/src/components/AgentTopBar";
 import { makeStyles, radius, spacing, typography } from "@/src/theme";
 
 const FILTERS = [
@@ -42,7 +43,7 @@ export default function AgentCases() {
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]} testID="agent-cases-screen">
       <View style={styles.header}>
-        <Text style={styles.title}>My Cases</Text>
+        <AgentTopBar title="My Cases" />
         <TextField
           label="Search"
           value={q}
@@ -84,6 +85,8 @@ export default function AgentCases() {
         <FlatList
           data={casesQ.data?.items ?? []}
           keyExtractor={(c) => c.id}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           contentContainerStyle={{ padding: spacing.lg, paddingTop: spacing.md }}
           renderItem={({ item }) => (
             <Pressable style={styles.card} onPress={() => router.push(`/case/${item.id}`)} testID={`case-card-${item.internal_case_id}`}>

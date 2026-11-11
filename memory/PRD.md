@@ -27,3 +27,14 @@ A private, secure field-verification management system for the company (CheckSph
 - P1: Supervisor scope editor UI (the backend already supports client/state/city/branch scope); report template builder UI for custom forms; mock-location detection on native; retention purge job and daily backup job; incident/breach log screen
 - P1: Branded logo upload for exports; notifications list for agents
 - P2: Advanced offline photo queue (photos currently need connectivity to upload); EXIF/altered-image analysis; supervisor productivity filters; mobile admin layout
+
+## Iteration 3-4 (2026-06)
+- Agent "Request New Verification": agent picks a supervisor, uploads a mandatory document and declaration; status "Pending supervisor approval" shown to agent; supervisor/super admin Case Requests page (edit, clarify, reject, duplicate, escalate, approve & allocate to any agent with SLA)
+- New case fields (co-applicant, seller, primary contact*, alternate phone, bank state, pincode (6 digits), state of verification, notes) in create form, cases table, Excel import template/import and cases.xlsx export
+- Agent top bar: hamburger menu + bell with unread count; notifications with Acknowledge / Accept / Request Reassignment (one response only)
+- 24h pending alerts (agent + scoped supervisors) and 48h (super admin) for cases and requests: in-app bell + dashboard banner/cards; phone notification-centre alerts via local notifications (native, app open/background)
+- Fixes: keyboard-aware Screen and modals, sign-out redirect, session wiped on page reload (token race + logout loop)
+- Tested: iteration_3, iteration_4
+## Backlog additions
+- Real push notifications when app is fully closed (needs Emergent push + native build)
+- Role guard on case/report/camera screens

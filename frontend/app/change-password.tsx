@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useRouter } from "expo-router";
-import { Text, View } from "react-native";
+import { Redirect, useRouter } from "expo-router";
+import { Pressable, Text, View } from "react-native";
 
+import { homeFor } from "@/src/navigation";
 import { api } from "@/src/api";
 import { TextField } from "@/src/components/fields";
 import { Banner, Btn, Screen } from "@/src/components/ui";
@@ -18,6 +19,8 @@ export default function ChangePassword() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  if (!user) return <Redirect href="/" />;
+
   const onSubmit = async () => {
     setError("");
     if (next.length < 8) {
@@ -32,11 +35,7 @@ export default function ChangePassword() {
     try {
       await api("/auth/change-password", { method: "POST", body: { current_password: current, new_password: next } });
       await refresh();
-      if (user?.role === "agent") {
-        router.replace("/(agent)/home");
-      } else {
-        router.replace("/(admin)/dashboard");
-      }
+      router.replace(homeFor(user?.role) as any);
     } catch (e: any) {
       setError(e?.message ?? "Could not change password");
     } finally {
@@ -53,10 +52,13 @@ export default function ChangePassword() {
           message="For security, you must set a new password before you can continue. The temporary password shared by your administrator will stop working."
         />
         {error ? <Banner message={error} tone="error" /> : null}
-        <TextField label="Current password" value={current} onChange={setCurrent} testID="change-current-input" />
-        <TextField label="New password" value={next} onChange={setNext} testID="change-new-input" />
-        <TextField label="Confirm new password" value={confirm} onChange={setConfirm} testID="change-confirm-input" />
+        <TextField label="Current password" value={current} onChange={setCurrent} testID="change-current-input" secure />
+        <TextField label="New password" value={next} onChange={setNext} testID="change-new-input" secure />
+        <TextField label="Confirm new password" value={confirm} onChange={setConfirm} testID="change-confirm-input" secure />
         <Btn label="Set New Password" onPress={onSubmit} loading={loading} testID="change-submit-button" full />
+        <Pressable onPress={async () => { await signOut(); router.replace("/"); }} testID="change-signout-link" style={{ alignSelf: "center", padding: 8 }}>
+          <Text style={{ color: "#2B5278", fontWeight: "700" }}>Sign out</Text>
+        </Pressable>
       </View>
     </Screen>
   );

@@ -7,6 +7,7 @@ import { useNetInfo } from "@react-native-community/netinfo";
 import { api } from "@/src/api";
 import { pendingCount, syncAllDrafts } from "@/src/utils/drafts";
 import { Banner, Btn, Card, Empty, ErrorBox, KpiCard, Loading, Screen, SectionTitle, StatusPill, showToast } from "@/src/components/ui";
+import { AgentTopBar } from "@/src/components/AgentTopBar";
 import { useSession } from "@/src/session";
 import { makeStyles, spacing, typography } from "@/src/theme";
 
@@ -66,6 +67,7 @@ export default function AgentHome() {
   const needsAttention = [...overdue, ...dueToday, ...returned].filter(
     (v, i, a) => a.findIndex((x) => x.id === v.id) === i,
   ).slice(0, 8);
+  const stale = active.filter((c) => c.updated_at && Date.now() - new Date(c.updated_at).getTime() > 24 * 3600 * 1000);
 
   const onSync = async () => {
     setSyncing(true);
@@ -83,6 +85,7 @@ export default function AgentHome() {
 
   return (
     <Screen>
+      <AgentTopBar title="CheckSphere" />
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
         <View>
           <Text style={styles.hello}>Hello, {user?.name?.split(" ")[0] ?? "Agent"}</Text>
@@ -94,7 +97,11 @@ export default function AgentHome() {
           </Text>
         </View>
       </View>
-
+      {stale.length > 0 ? (
+        <View style={{ marginTop: spacing.md }} testID="pending-24h-alert">
+          <Banner tone="error" message={`${stale.length} case${stale.length > 1 ? "s" : ""} pending more than 24 hours — please complete or update them.`} />
+        </View>
+      ) : null}
       {pending > 0 ? (
         <View style={{ marginTop: spacing.md }}>
           <Banner
@@ -114,6 +121,7 @@ export default function AgentHome() {
         <KpiCard label="Submitted" value={submitted.length} tone="success" testID="kpi-submitted" />
       </View>
 
+      <Btn label="Request New Verification" variant="secondary" onPress={() => router.push("/request-new")} testID="home-request-new-btn" full />
       <SectionTitle>Needs attention</SectionTitle>
       {casesQ.isLoading ? (
         <Loading label="Loading assigned cases…" />

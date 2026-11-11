@@ -104,6 +104,9 @@ def user_public(u: dict) -> dict:
         "disabled": u.get("disabled", False),
         "scope": u.get("scope") or {},
         "created_at": u.get("created_at"),
+        "last_login_at": u.get("last_login_at"),
+        "last_login_ip": u.get("last_login_ip"),
+        "last_login_device": u.get("last_login_device"),
     }
 
 
@@ -130,6 +133,8 @@ def case_scope_query(user: dict) -> dict:
             cons.append({"city": {"$in": scope["cities"]}})
         if scope.get("branch_ids"):
             cons.append({"branch_id": {"$in": scope["branch_ids"]}})
+        if scope.get("agent_ids"):
+            cons.append({"assigned_agent_id": {"$in": scope["agent_ids"]}})
         if not cons:
             return {}
         return {"$or": cons} if len(cons) > 1 else cons[0]

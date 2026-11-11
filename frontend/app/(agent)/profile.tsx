@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 
 import { api } from "@/src/api";
 import { Btn, Card, DisplayRow, Loading, Screen, SectionTitle } from "@/src/components/ui";
+import { AgentTopBar } from "@/src/components/AgentTopBar";
 import { useSession } from "@/src/session";
 import { makeStyles, spacing, typography } from "@/src/theme";
 
@@ -15,6 +16,7 @@ export default function AgentProfile() {
 
   return (
     <Screen testID="agent-profile-screen">
+      <AgentTopBar title="Profile" />
       <Card>
         <DisplayRow label="Name" value={user?.name} />
         <DisplayRow label="Agent ID" value={user?.agent_id} />
@@ -38,7 +40,7 @@ export default function AgentProfile() {
       <View style={{ height: spacing.md }} />
       <Btn label="Change Password" variant="secondary" onPress={() => router.push("/change-password")} testID="profile-change-password-btn" full />
       <View style={{ height: spacing.md }} />
-      <Btn label="Sign Out" variant="danger" onPress={() => signOut()} testID="profile-logout-btn" full />
+      <Btn label="Sign Out" variant="danger" onPress={async () => { await signOut(); router.replace("/login?role=agent"); }} testID="profile-logout-btn" full />
       <Text style={styles.note}>
         CheckSphere records login device, IP and time for audit purposes. Your offline drafts are stored
         encrypted on this device and sync automatically when the internet is available.

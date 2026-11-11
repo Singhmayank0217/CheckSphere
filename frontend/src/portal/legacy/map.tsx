@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 
 import { api } from "@/src/api";
+import { usePortalBase } from "@/src/portal/base";
 import { MiniMap } from "@/src/components/MiniMap";
 import { Banner, Empty, FLAG_LABELS, Loading, Screen, SectionTitle, StatusPill } from "@/src/components/ui";
 import { SelectField } from "@/src/components/fields";
@@ -11,6 +12,7 @@ import { makeStyles, radius, spacing, typography } from "@/src/theme";
 
 export default function MapFlags() {
   const router = useRouter();
+  const base = usePortalBase();
   const styles = useStyles();
   const [flaggedOnly, setFlaggedOnly] = useState(true);
   const [status, setStatus] = useState("");
@@ -70,7 +72,7 @@ export default function MapFlags() {
           keyExtractor={(c: any) => c.id}
           contentContainerStyle={{ paddingBottom: spacing.xl, gap: spacing.sm }}
           renderItem={({ item: c }: any) => (
-            <Pressable style={styles.card} onPress={() => router.push(`/cases/${c.id}`)} testID={`map-case-${c.internal_case_id}`}>
+            <Pressable style={styles.card} onPress={() => router.push(`${base}/cases/${c.id}` as any)} testID={`map-case-${c.internal_case_id}`}>
               <View style={styles.cardHead}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.caseName}>{c.applicant_name} · {c.internal_case_id}</Text>

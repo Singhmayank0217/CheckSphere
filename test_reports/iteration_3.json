@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 3 tested agent case requests, supervisor approval and allocation, notifications, pending alerts, new case fields and auth redirects. Backend: 19/19 pytest pass (tests/test_iter4_requests_notifications.py). These cover request create, document upload and submit, 422 validation (supervisor, doc, pincode, phone, declaration), agent isolation, supervisor list, edit, clarify/reject needing a comment, approve needing an agent, approve creating a CSV case for agent2 with notifications to the allocated agent and the requester, ack, accept/reassign, dashboard stats fields, POST /cases phone and pincode validation, and the import template, import and cases.xlsx export columns. Frontend mobile (390x844) as agent: login with a wrong password shows 'Invalid credentials'. Home shows the hamburger, the bell badge, the 24h banner and the Request New Verification button. The hamburger drawer DOES open on web (visible about 1s after tap, 312px wide). The drawer closes from the close button, from a tap outside and after choosing any item, and every item navigates correctly. The Help modal works. Sign Out from the menu and from Profile goes to /login?role=agent, and browser back then shows the role-select page, not a blank page. The request-new form works end to end through in-app navigation: all fields, supervisor select, web file chooser upload, declaration and submit. The request then appears with 'Submitted', 'Sent for Allocation' and 'Pending supervisor approval'. Notifications: Acknowledge, Accept and the Request Reassignment popup (submit disabled until a reason is entered) all work. Web (1440) as supervisor: the dashboard shows the 24h banner, the request-pending line, the Pending >24h card and the bell dropdown. Review popup, then allocate agent, then Approve & Allocate works and the status becomes Assigned. As super admin: the 48h banner and card show, /admin/create has all the new fields, /admin/cases has Contact and PIN columns, and portal sign out followed by back stays on role-select. CRITICAL: a hard reload or deep link of /request-new while signed in triggers an infinite /auth/logout 401 loop and signs the user out. No deprecated Expo packages found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/requests/{id}/action (approve)", "issue": "The frontend sends data: form with approve. The backend validates {**r, **data} but builds the case only from the stored request r. Any corrections typed in the Review popup without first clicking 'Save Corrections' pass validation but are silently lost from the created case. Reference: requests_routes.py:204-226"},
+      {"endpoint": "GET /api/dashboard/stats", "issue": "requests_pending counts all requests globally and is not scoped to the supervisor, so supervisor dashboards show other supervisors' requests. Reference: dashboard_routes.py:118"},
+      {"endpoint": "POST /api/notifications/{id}/ack, /api/requests/{id}/*", "issue": "An invalid ObjectId gives 500 (bson InvalidId) instead of 404/400"},
+      {"endpoint": "POST /api/cases/{id}/agent-response", "issue": "The response value is not validated: any value other than 'accept' is logged as a reassignment request. There is also no guard against repeated accept/reassign, or against cases that are not active."},
+      {"endpoint": "notify_role('supervisor') in agent_response + pending_alert_loop", "issue": "Reassignment requests and 24h pending alerts go to EVERY supervisor, not to the assigned or scoped supervisor. The sup1 bell already shows 50 unread. Reference: requests_routes.py:293, 307"},
+      {"endpoint": "POST /api/requests (agent)", "issue": "The frontend creates the request, then uploads, then submits. If upload or submit fails, an orphan 'draft' stays. Resubmitting creates another new draft, so duplicates pile up in My Requests. There is no delete or draft-reuse path."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Session / API 401 handling", "issue": "CRITICAL. A hard reload or direct deep link of /request-new while signed in fires GET /requests and /requests/supervisors before the token provider is set, and both return 401. onUnauthorized then calls signOut, which calls api('/auth/logout'). The first logout carries the restored token and revokes the valid session; later logout calls return 401, each 401 calls onUnauthorized again, so signOut recurses and fires hundreds of 401 /auth/logout calls. The user ends up signed out on a request-new screen with an empty Supervisor list and no redirect to login. Reference: src/session.tsx:73-89, src/api.ts:41-43, app/_layout.tsx:26. /notifications, /case/[id], /report/* and /camera sit outside RoleGate and carry the same risk.", "testID": "req-supervisor-select", "priority": "CRITICAL"},
+      {"component": "Notifications Accept/Reassign", "issue": "Accept and Request Reassignment stay visible after the agent has already accepted. Nothing reflects case.agent_response, so the agent can accept and reassign repeatedly. Reassign also does not ack the notification.", "testID": "accept-{id}", "priority": "MEDIUM"},
+      {"component": "request-new validation errors", "issue": "The error list renders at the top of the long form while the user is at the Submit button at the bottom. The form does not scroll to the errors, so tapping Submit looks like nothing happened.", "testID": "request-errors", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Deep link / page reload into stack screens outside the (agent) RoleGate", "issue": "Queries run without waiting for session ready. See the CRITICAL ui_bug above.", "affected_testIDs": ["request-new-screen", "notifications-screen"]}
+    ],
+    "design_issues": [
+      {"screen": "Supervisor/Admin Dashboard", "issues": ["The 'Pending > 48h' card sits alone in a third row stretched to full width, inconsistent with the 6-column grid"]},
+      {"screen": "Agent request-new SelectField sheet", "issues": ["The option sheet renders in the middle of the screen (about y=372-450) instead of docking to the bottom"]},
+      {"screen": "Supervisor Case Requests table", "issues": ["After the approve popup closes, the table stays scrolled horizontally, which hides the CSV and applicant columns"]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter4_requests_notifications.py", "/app/test_reports/pytest/iter4.xml"],
+  "action_items": [
+    "CRITICAL: In session.tsx signOut, call logout without triggering onUnauthorized (skip-401-hook flag or a re-entrancy guard 'signingOut'), and make onUnauthorized a no-op while signing out or before ready.",
+    "CRITICAL: Gate stack screens outside (agent) (request-new, notifications, case/[id], report/*, camera) on session ready + user. Either wrap them in RoleGate, render the root Stack only after ready, or use useQuery enabled: !!token. A 401 before the token is restored must not revoke the session.",
+    "Approve: persist body.data edits into the request and the case (or require Save first). Currently popup edits are dropped.",
+    "Scope requests_pending in dashboard stats to the supervisor via scoped_query. Notify only the assigned or scoped supervisor for reassignment and 24h alerts.",
+    "Validate agent-response response in {accept, reassign}. Hide Accept/Reassign in Notifications once case.agent_response is set, and ack the notification on reassign.",
+    "Return 404 for invalid ObjectIds in requests and notifications endpoints.",
+    "request-new: scroll to the top (or to the errors) when validation fails. Reuse the existing draft id when upload or submit fails, instead of creating a new draft.",
+    "Optional: add expo-notifications addNotificationResponseReceivedListener so tapping a phone alert opens the case or notifications screen."
+  ],
+  "critical_code_review_comments": [
+    "api.ts plus session.tsx: the 401 hook recursion (signOut -> api -> 401 -> onUnauthorized -> signOut) is an unbounded loop. It is reproducible on web and would also hit native whenever a token expires while signOut runs.",
+    "requests_routes.py approve: the 'from datetime import ...' inside the function and datetime.fromisoformat(body.due_at) with a bad string raise 500. Validate due_at.",
+    "Deleting a case leaves its notifications behind (Accept and Open case on deleted cases lead to 404)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter4_requests_notifications.py (new)"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "~88% (core flows pass via in-app navigation; deep-link/reload of /request-new broken)"},
+  "seed_data_creation": "Test runs created TEST_ case_requests by agent1 (no delete endpoint, so they remain as 'assigned' or 'sent' records), plus notifications for sup1, all supervisors, agent1 and agent2. The cases created (CSV-000075, 78, 81, plus TEST_new_/TEST_imp_ cases) were deleted by id.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iter4_requests_notifications.py -p no:xdist -o addopts=''. It cleans up its cases by id. On web, two copies of each agent screen exist in the DOM, so use '[data-testid=...]:visible'. Navigate to /request-new in-app (Home 'Request New Verification' text), not page.goto, until the reload bug is fixed. To retest the bug: log in, then page.goto('/request-new') and watch for 401 /auth/logout spam. Select options use testID select-option-<slug>. The web file chooser works via page.expect_file_chooser on req-doc-btn. Supervisor approve: review-request-<id>, then req-agent-select, then select-option-anita-desai, then req-approve-btn.",
+  "rca_of_issue": "Reload/deep-link logout loop. Repro: sign in as agent1, then hard-load /request-new. Network shows 401 GET /requests and /requests/supervisors without an Authorization header, then 200 POST /auth/logout (this revokes the real session), then hundreds of 401 /auth/logout. Root cause: the root Stack renders every route before SessionProvider has restored the token (setTokenProvider runs asynchronously after secureGet), and /request-new is not inside RoleGate. api() calls onUnauthorized on any 401, and signOut itself uses api(), which recurses on 401. Mitigation: add a re-entrancy guard on signOut, skip the 401 hook for /auth/logout, and gate screens or queries on ready && token."
+}

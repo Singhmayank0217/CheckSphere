@@ -176,14 +176,17 @@ def build_case_pdf(case, report, evidence, config, settings, review_url) -> byte
     return buf.getvalue()
 
 
-CASE_XLSX_HEADERS = ["Internal Case ID", "Client Case ID", "Client", "Branch", "Applicant", "Report Type", "Status",
-                     "Priority", "City", "State", "Agent", "Created", "Due", "Submitted", "Approved", "Flags"]
+CASE_XLSX_HEADERS = ["Internal Case ID", "Client Case ID", "Client", "Branch", "Bank State", "Applicant", "Co-applicant", "Seller",
+                     "Primary Contact", "Alternate Phone", "Report Type", "Status", "Priority", "Full Address", "Pincode",
+                     "State of Verification", "City", "State", "Notes", "Agent", "Created", "Due (SLA)", "Submitted", "Approved", "Flags"]
 
 
 def _case_row(c):
-    return [c.get("internal_case_id"), c.get("client_case_id"), c.get("client_name"), c.get("branch_name"),
-            c.get("applicant_name"), c.get("report_type_name") or c.get("report_type"),
-            (c.get("status") or "").replace("_", " ").title(), c.get("priority"), c.get("city"), c.get("state"),
+    return [c.get("internal_case_id"), c.get("client_case_id"), c.get("client_name"), c.get("branch_name"), c.get("bank_state"),
+            c.get("applicant_name"), c.get("co_applicant_name"), c.get("seller_name"), c.get("primary_phone"), c.get("alt_phone"),
+            c.get("report_type_name") or c.get("report_type"),
+            (c.get("status") or "").replace("_", " ").title(), c.get("priority"), c.get("assigned_address"), c.get("pincode"),
+            c.get("verification_state"), c.get("city"), c.get("state"), c.get("notes"),
             c.get("assigned_agent_name"), fmt_dt(c.get("created_at")), fmt_dt(c.get("due_at")),
             fmt_dt(c.get("last_submitted_at")), fmt_dt(c.get("approved_at")), ", ".join(c.get("flags") or [])]
 
@@ -210,12 +213,13 @@ def build_import_template_xlsx() -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Cases Import"
-    headers = ["Client Case ID", "Client Name", "Branch Name", "Applicant Name", "Co-applicant Name", "Loan/Product Type",
-               "Report Type", "Assigned Address", "City", "State", "Priority", "Due Date (YYYY-MM-DD)"]
+    headers = ["Client Case ID", "Client Name", "Branch Name", "Bank State", "Applicant Name", "Co-applicant Name", "Seller Name",
+               "Primary Contact Number", "Alternate Phone", "Loan/Product Type", "Report Type", "Assigned Address", "Pincode",
+               "State of Verification", "City", "State", "Priority", "Due Date (YYYY-MM-DD)", "Notes"]
     ws.append(headers)
-    ws.append(["C-2024-0001", "Metro Capital Finance", "Andheri", "Rahul Sharma", "", "Home Loan",
-               "Applicant Residence Verification", "B-402, Green Meadows, Andheri West", "Mumbai", "Maharashtra",
-               "High", "2026-06-30"])
+    ws.append(["C-2024-0001", "Metro Capital Finance", "Andheri", "Maharashtra", "Rahul Sharma", "", "", "9876543210", "",
+               "Home Loan", "Applicant Residence Verification", "B-402, Green Meadows, Andheri West", "400058",
+               "Maharashtra", "Mumbai", "Maharashtra", "High", "2026-06-30", ""])
     _style_sheet(ws, 1)
     buf = io.BytesIO()
     wb.save(buf)

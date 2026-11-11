@@ -1,6 +1,7 @@
 // Shared UI primitives for CheckSphere.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -49,9 +50,14 @@ export function Screen({ children, scroll = true, pad = true, testID }: {
   return (
     <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]} testID={testID}>
       {scroll ? (
-        <ScrollView contentContainerStyle={[pad && { padding: spacing.lg }]} showsVerticalScrollIndicator={false}>
+        <KeyboardAwareScrollView
+          bottomOffset={32}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={[{ flexGrow: 1 }, pad && { padding: spacing.lg, paddingBottom: spacing.xxl }]}
+          showsVerticalScrollIndicator={false}
+        >
           {children}
-        </ScrollView>
+        </KeyboardAwareScrollView>
       ) : (
         <View style={[{ flex: 1 }, pad && { padding: spacing.lg }]}>{children}</View>
       )}
@@ -249,12 +255,16 @@ export function PopupModal({ visible, title, onClose, children, wide }: {
   const styles = useStyles();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <Pressable style={[styles.modalCard, wide && { maxWidth: 720, width: "92%" }]} onPress={() => {}}>
-          <Text style={styles.modalTitle} testID="modal-title">{title}</Text>
-          {children}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <Pressable style={styles.modalOverlay} onPress={onClose}>
+          <Pressable style={[styles.modalCard, { maxHeight: "90%" }, wide && { maxWidth: 720, width: "92%" }]} onPress={() => {}}>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalTitle} testID="modal-title">{title}</Text>
+              {children}
+            </ScrollView>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

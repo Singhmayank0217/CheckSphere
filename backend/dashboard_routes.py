@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Request
 
 import core
 import security
+from requests_routes import scoped_query as requests_scope
 
 router = APIRouter()
 
@@ -83,11 +84,40 @@ async def stats(request: Request, from_date: str | None = None, to_date: str | N
                 sup_stats[name][key] += 1
     supervisors = [{"name": k, **v} for k, v in sorted(sup_stats.items())]
 
+    # Case volume (last 14 days), status distribution, flags, TAT by agent, pending review
+    volume = defaultdict(int)
+    start_day = (now - timedelta(days=13)).date()
+    for c in cases:
+        if c.get("created_at") and c["created_at"].date() >= start_day:
+            volume[c["created_at"].date().isoformat()] += 1
+    volume_series = [{"date": (start_day + timedelta(days=i)).isoformat(),
+                      "count": volume.get((start_day + timedelta(days=i)).isoformat(), 0)} for i in range(14)]
+    flag_summary = defaultdict(int)
+    for c in cases:
+        for f in c.get("flags") or []:
+            flag_summary[f] += 1
+    tat_agent = defaultdict(list)
+    for c in cases:
+        if c.get("approved_at") and c.get("created_at"):
+            tat_agent[c.get("assigned_agent_name") or "-"].append((c["approved_at"] - c["created_at"]).total_seconds() / 3600.0)
+    pending = sorted([c for c in cases if c.get("status") in ("submitted", "under_review")],
+                     key=lambda c: c.get("last_submitted_at") or c["created_at"])
+
     return {
+        "volume": volume_series,
+        "flag_summary": dict(flag_summary),
+        "flagged_cases": sum(1 for c in cases if c.get("flags")),
+        "tat_by_agent": [{"name": k, "hours": round(sum(v) / len(v), 1)} for k, v in sorted(tat_agent.items())],
+        "pending_review": [security.case_public(c) for c in pending[:10]],
+        "escalated": sum(1 for c in cases if c.get("escalated")),
         "counts": {k: counts.get(k, 0) for k in STATUS_ORDER},
         "total": len(cases),
         "unassigned": unassigned,
         "overdue": len(overdue_cases),
+        "pending_24h": sum(1 for c in cases if c.get("status") in core.ACTIVE_STATUSES and c.get("updated_at") and c["updated_at"] < now - timedelta(hours=24)),
+        "pending_48h": sum(1 for c in cases if c.get("status") in core.ACTIVE_STATUSES and c.get("updated_at") and c["updated_at"] < now - timedelta(hours=48)),
+        "requests_pending": await core.db.case_requests.count_documents(
+            {"$and": [await requests_scope(ctx["user"]), {"status": {"$in": ["sent_for_allocation", "under_review"]}}]}),
         "avg_tat_hours": avg_tat,
         "agents": agents,
         "supervisors": supervisors,

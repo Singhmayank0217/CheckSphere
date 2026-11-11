@@ -10,13 +10,15 @@ import { SelectField, TextField } from "@/src/components/fields";
 import { Banner, Btn, Card, Screen, SectionTitle, showToast } from "@/src/components/ui";
 import { makeStyles, spacing, typography } from "@/src/theme";
 
+const BLANK = {
+  client_case_id: "", applicant_name: "", co_applicant_name: "", seller_name: "", primary_phone: "", alt_phone: "", loan_type: "",
+  report_type: "", assigned_address: "", pincode: "", bank_state: "", verification_state: "", city: "", state: "", priority: "Medium", due_at: "", notes: "",
+};
+
 export default function NewCases() {
   const queryClient = useQueryClient();
   const styles = useStyles();
-  const [form, setForm] = useState<any>({
-    client_case_id: "", applicant_name: "", co_applicant_name: "", loan_type: "",
-    report_type: "", assigned_address: "", city: "", state: "", priority: "Medium", due_at: "",
-  });
+  const [form, setForm] = useState<any>({ ...BLANK });
   const [clientId, setClientId] = useState("");
   const [branchId, setBranchId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -30,8 +32,12 @@ export default function NewCases() {
   const set = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
   const create = async () => {
-    if (!form.client_case_id || !form.applicant_name || !form.report_type || !form.assigned_address) {
-      showToast("Client Case ID, Applicant, Report Type and Address are required", "error");
+    if (!clientId || !form.client_case_id || !form.applicant_name || !form.report_type || !form.assigned_address || !form.primary_phone) {
+      showToast("Client, Client Case ID, Applicant, Primary Contact, Report Type and Address are required", "error");
+      return;
+    }
+    if (form.pincode && !/^\d{6}$/.test(form.pincode)) {
+      showToast("Pincode must be 6 digits", "error");
       return;
     }
     setBusy(true);
@@ -46,7 +52,7 @@ export default function NewCases() {
         },
       });
       showToast("Case created", "success");
-      setForm({ client_case_id: "", applicant_name: "", co_applicant_name: "", loan_type: "", report_type: "", assigned_address: "", city: "", state: "", priority: "Medium", due_at: "" });
+      setForm({ ...BLANK });
       queryClient.invalidateQueries({ queryKey: ["admin-cases"] });
       queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
     } catch (e: any) {
@@ -132,22 +138,27 @@ export default function NewCases() {
               onChange={(v) => set("priority", v)} testID="new-case-priority-select" />
           </View>
         </View>
-        <TextField label="Client Case ID" value={form.client_case_id} onChange={(v) => set("client_case_id", v)} testID="new-case-client-case-id" />
-        <TextField label="Applicant Name" value={form.applicant_name} onChange={(v) => set("applicant_name", v)} testID="new-case-applicant-input" />
-        <TextField label="Co-applicant Name (optional)" value={form.co_applicant_name} onChange={(v) => set("co_applicant_name", v)} testID="new-case-coapplicant-input" />
-        <TextField label="Loan / Product Type" value={form.loan_type} onChange={(v) => set("loan_type", v)} testID="new-case-loan-input" />
-        <TextField label="Assigned Address" value={form.assigned_address} onChange={(v) => set("assigned_address", v)} multiline testID="new-case-address-input" />
-        <View style={{ flexDirection: "row", gap: spacing.md }}>
-          <View style={{ flex: 1 }}>
-            <TextField label="City" value={form.city} onChange={(v) => set("city", v)} testID="new-case-city-input" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <TextField label="State" value={form.state} onChange={(v) => set("state", v)} testID="new-case-state-input" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <TextField label="Due (YYYY-MM-DD)" value={form.due_at} onChange={(v) => set("due_at", v)} testID="new-case-due-input" />
-          </View>
+        <TextField label="Client Case ID *" value={form.client_case_id} onChange={(v) => set("client_case_id", v)} testID="new-case-client-case-id" />
+        <View style={styles.row}>
+          <View style={styles.col}><TextField label="Applicant Name *" value={form.applicant_name} onChange={(v) => set("applicant_name", v)} testID="new-case-applicant-input" /></View>
+          <View style={styles.col}><TextField label="Co-applicant Name" value={form.co_applicant_name} onChange={(v) => set("co_applicant_name", v)} testID="new-case-coapplicant-input" /></View>
+          <View style={styles.col}><TextField label="Seller Name" value={form.seller_name} onChange={(v) => set("seller_name", v)} testID="new-case-seller-input" /></View>
         </View>
+        <View style={styles.row}>
+          <View style={styles.col}><TextField label="Primary Contact Number *" value={form.primary_phone} onChange={(v) => set("primary_phone", v)} keyboardType="phone-pad" testID="new-case-phone-input" /></View>
+          <View style={styles.col}><TextField label="Alternate Phone" value={form.alt_phone} onChange={(v) => set("alt_phone", v)} keyboardType="phone-pad" testID="new-case-alt-phone-input" /></View>
+          <View style={styles.col}><TextField label="Bank State" value={form.bank_state} onChange={(v) => set("bank_state", v)} testID="new-case-bank-state-input" /></View>
+        </View>
+        <TextField label="Loan / Product Type" value={form.loan_type} onChange={(v) => set("loan_type", v)} testID="new-case-loan-input" />
+        <TextField label="Full Address *" value={form.assigned_address} onChange={(v) => set("assigned_address", v)} multiline testID="new-case-address-input" />
+        <View style={styles.row}>
+          <View style={styles.col}><TextField label="Pincode" value={form.pincode} onChange={(v) => set("pincode", v)} keyboardType="numeric" testID="new-case-pincode-input" /></View>
+          <View style={styles.col}><TextField label="State of Verification" value={form.verification_state} onChange={(v) => set("verification_state", v)} testID="new-case-ver-state-input" /></View>
+          <View style={styles.col}><TextField label="City / District" value={form.city} onChange={(v) => set("city", v)} testID="new-case-city-input" /></View>
+          <View style={styles.col}><TextField label="State" value={form.state} onChange={(v) => set("state", v)} testID="new-case-state-input" /></View>
+          <View style={styles.col}><TextField label="SLA Due (YYYY-MM-DD)" value={form.due_at} onChange={(v) => set("due_at", v)} testID="new-case-due-input" /></View>
+        </View>
+        <TextField label="Notes" value={form.notes} onChange={(v) => set("notes", v)} multiline testID="new-case-notes-input" />
         <Btn label="Create Case" onPress={create} loading={busy} testID="new-case-submit-btn" full />
       </Card>
 
@@ -181,6 +192,8 @@ export default function NewCases() {
 const useStyles = makeStyles((colors) => ({
   title: { fontSize: typography.scale.xxl, fontWeight: "800", color: colors.onSurface, marginBottom: spacing.md, fontFamily: typography.fontFamily },
   help: { color: colors.muted, fontSize: typography.scale.sm, lineHeight: 18, marginBottom: spacing.md },
+  row: { flexDirection: "row", gap: spacing.md, flexWrap: "wrap" },
+  col: { flex: 1, minWidth: 180 },
   fileLabel: {
     alignSelf: "center", backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.brandPrimary,
     borderRadius: 12, paddingHorizontal: 16, minHeight: 36, justifyContent: "center", display: "flex", alignItems: "center",

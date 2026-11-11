@@ -209,6 +209,10 @@ def config_for(report_type: str, settings: dict | None = None) -> dict:
         cfg["sections"] = [{"title": "Custom Verification Details", "fields": fields}]
     if cfg.get("min_call_attempts", 0) and settings:
         cfg["min_call_attempts"] = int(settings.get("telephone_min_attempts", cfg["min_call_attempts"]))
+    overrides = ((settings or {}).get("required_overrides") or {}).get(report_type) or {}
+    if overrides:
+        cfg["sections"] = [{**s, "fields": [{**f, "required": bool(overrides.get(f["key"], f.get("required")))}
+                                            for f in s.get("fields", [])]} for s in cfg["sections"]]
     return cfg
 
 

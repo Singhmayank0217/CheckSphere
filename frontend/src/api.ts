@@ -6,7 +6,7 @@ import { storage } from "@/src/utils/storage";
 
 export const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "";
 
-let tokenProvider: () => Promise<string | null> = async () => null;
+let tokenProvider: () => Promise<string | null> = () => storage.secureGet("auth_token", null);
 let onUnauthorized: (() => void) | null = null;
 
 export function setTokenProvider(fn: () => Promise<string | null>) {
@@ -39,7 +39,7 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   const isJson = (res.headers.get("content-type") ?? "").includes("application/json");
   const data = isJson ? await res.json() : await res.text();
   if (res.status === 401) {
-    onUnauthorized?.();
+    if (token && path !== "/auth/logout") onUnauthorized?.();
     throw new ApiError(401, "Session expired. Please sign in again.");
   }
   if (!res.ok) {
@@ -58,7 +58,7 @@ export async function getDeviceId(): Promise<string> {
   return id;
 }
 
-export async function loginRequest(identifier: string, password: string) {
+export async function loginRequest(identifier: string, password: string, expectedRole?: string) {
   const deviceId = await getDeviceId();
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: "POST",
@@ -66,6 +66,7 @@ export async function loginRequest(identifier: string, password: string) {
     body: JSON.stringify({
       identifier,
       password,
+      expected_role: expectedRole,
       device_id: deviceId,
       device_model: `${Platform.OS} ${Platform.Version}`,
       platform: Platform.OS,

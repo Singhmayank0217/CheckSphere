@@ -70,7 +70,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
   }, []);
 
+  const signingOut = useRef(false);
   const signOut = useCallback(async () => {
+    if (signingOut.current) return;
+    signingOut.current = true;
     try {
       await api("/auth/logout", { method: "POST" });
     } catch {
@@ -81,6 +84,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     await storage.removeItem("auth_user");
     setUser(null);
     setToken(null);
+    signingOut.current = false;
   }, []);
   signOutRef.current = signOut;
 

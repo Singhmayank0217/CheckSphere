@@ -3,10 +3,19 @@ import { Platform } from "react-native";
 import { NativeTabs } from "expo-router/unstable-native-tabs";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
+import { RoleGate } from "@/src/portal/RoleGate";
 import { usesNativeTabs } from "@/src/navigation";
 import { useTheme } from "@/src/theme";
 
 export default function AgentLayout() {
+  return (
+    <RoleGate role="agent">
+      <AgentTabs />
+    </RoleGate>
+  );
+}
+
+function AgentTabs() {
   const { colors } = useTheme();
 
   if (usesNativeTabs) {

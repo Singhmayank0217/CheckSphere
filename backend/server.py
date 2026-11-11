@@ -17,6 +17,8 @@ import evidence_routes
 import dashboard_routes
 import export_routes
 import audit_routes
+import ops_routes
+import requests_routes
 from seed import seed_if_empty
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -64,7 +66,7 @@ async def health():
 
 api_router = APIRouter(prefix="/api")
 for module in (auth_routes, admin_routes, cases_routes, reports_routes, evidence_routes,
-               dashboard_routes, export_routes, audit_routes):
+               dashboard_routes, export_routes, audit_routes, ops_routes, requests_routes):
     api_router.include_router(module.router)
 app.include_router(api_router)
 
@@ -83,11 +85,14 @@ async def startup():
             logger.info("Demo data seeded")
     except Exception as exc:
         logger.error("Seed failed: %s", exc)
+    app.state.backup_task = asyncio.create_task(ops_routes.daily_backup_loop())
+    app.state.alert_task = asyncio.create_task(requests_routes.pending_alert_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown():
     app.state.index_task.cancel()
+    app.state.backup_task.cancel()
     with suppress(asyncio.CancelledError):
         await app.state.index_task
     core.client.close()

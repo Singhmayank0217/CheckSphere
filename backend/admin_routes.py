@@ -69,6 +69,10 @@ async def create_user(body: UserCreate, request: Request, ctx=Depends(security.a
         "must_change_password": True, "disabled": False,
         "scope": body.scope or {}, "created_at": core.now(),
     }
+    # sparse unique indexes only skip *missing* fields, not explicit nulls
+    for k in ("agent_id", "email"):
+        if doc.get(k) is None:
+            doc.pop(k)
     res = await core.db.users.insert_one(doc)
     await core.audit(ctx["user"], "user_created", "user", str(res.inserted_id), {"role": body.role}, request)
     return security.user_public(await core.db.users.find_one({"_id": res.inserted_id}))

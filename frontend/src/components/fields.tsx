@@ -1,6 +1,6 @@
 // Form field components (theme-tokenised, keyboard-friendly).
 import { useState } from "react";
-import { FlatList, Modal, Pressable, Switch, Text, TextInput, View } from "react-native";
+import { FlatList, Modal, Platform, Pressable, Switch, Text, TextInput, View } from "react-native";
 
 import { makeStyles, radius, spacing, typography, useTheme } from "@/src/theme";
 
@@ -17,10 +17,11 @@ const useStyles = makeStyles((colors) => ({
   inputDisabled: { backgroundColor: colors.surfaceTertiary, color: colors.onSurfaceTertiary },
   selectText: { fontSize: typography.scale.base, color: colors.onSurface, paddingVertical: 0 },
   selectPlaceholder: { color: colors.muted },
-  overlay: { flex: 1, backgroundColor: "rgba(26,26,24,0.5)", justifyContent: "flex-end" },
+  overlay: { flex: 1, backgroundColor: "rgba(26,26,24,0.5)", justifyContent: Platform.OS === "web" ? "center" : "flex-end", alignItems: Platform.OS === "web" ? "center" : "stretch" },
   sheet: {
     backgroundColor: colors.surfaceSecondary, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     maxHeight: "60%", paddingBottom: spacing.xl,
+    ...(Platform.OS === "web" ? { borderRadius: radius.lg, width: 420, maxWidth: "92%" } : {}),
   },
   option: { paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderBottomWidth: 1, borderBottomColor: colors.divider },
   optionText: { fontSize: typography.scale.base, color: colors.onSurface },
@@ -35,10 +36,10 @@ export function FieldLabel({ label, required }: { label: string; required?: bool
   );
 }
 
-export function TextField({ label, value, onChange, required, multiline, testID, keyboardType, autoCapitalize, editable, placeholder }: {
+export function TextField({ label, value, onChange, required, multiline, testID, keyboardType, autoCapitalize, editable, placeholder, secure }: {
   label: string; value: string | null | undefined; onChange: (v: string) => void; required?: boolean;
   multiline?: boolean; testID?: string; keyboardType?: "default" | "numeric" | "email-address" | "phone-pad";
-  autoCapitalize?: "none" | "sentences" | "words"; editable?: boolean; placeholder?: string;
+  autoCapitalize?: "none" | "sentences" | "words"; editable?: boolean; placeholder?: string; secure?: boolean;
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -53,6 +54,7 @@ export function TextField({ label, value, onChange, required, multiline, testID,
         placeholderTextColor={colors.muted}
         multiline={multiline}
         editable={editable !== false}
+        secureTextEntry={secure}
         testID={testID}
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize ?? "none"}

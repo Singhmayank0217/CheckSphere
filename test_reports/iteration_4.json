@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 4 retested the iteration_3 fixes plus a light regression. Backend: 29/30 pass across tests/test_iter5_scoping_fixes.py (new, 12 tests) and the updated test_iter4_requests_notifications.py (18 tests). The only failure is approve with an invalid due_at returning 500; that item was not in the fix list. Verified: approve with unsaved corrections keeps the corrected applicant, pincode, phone and address on the created case and the request, ignores supervisor_id, and returns 422 for an invalid correction. requests_pending is scoped: sup1's count is unchanged when a request goes to a TEST_ supervisor, and that supervisor's count goes up by 1. A reassignment request notifies only the assigned or scoped supervisor, not sup1. Notifications return can_respond and agent_response. agent-response returns 400 for an invalid value and for a second response. Invalid ObjectIds on ack, action, submit, cancel and document return 404. Frontend at 390x844: the CRITICAL reload bug is FIXED. Hard loading /request-new, /notifications, /home and /case/{id} keeps the user signed in with 0 calls to /auth/logout and no 401s, and the supervisor list loads (Meera Joshi). Reloading with a revoked token makes exactly 1 /auth/logout call and redirects to role-select, with no loop. Accept on an assignment notification hides Accept and Request Reassignment, shows 'accepted' and stays that way after a reload. Request form: an empty submit shows a toast and the error list directly above Submit, in the viewport. When submit is forced to fail with a 500 and then retried, the app makes 1 POST /requests and 1 document upload, so the draft is reused with no duplicate, and one entry appears in My Requests. Regression passed: agent menu (10 items, navigation works), Sign Out (1 logout call, then /login?role=agent; /request-new afterwards redirects to /), supervisor dashboard ('1 agent case request awaiting approval'), and Case Requests review: editing the applicant without saving, then Approve & Allocate, created the case with the edited name. No deprecated Expo packages.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/requests/{id}/action (approve)", "issue": "due_at='not-a-date' gives 500. datetime.fromisoformat at requests_routes.py:238 is not validated. The case_seq number is used up before the error, so CSV numbers get gaps. The supervisor portal 'SLA due' input is free text, so users can trigger this. Validate it and return 400 before next_seq."},
+      {"endpoint": "notify_case_supervisors (requests_routes.py:37-45)", "issue": "A supervisor with an empty scope (e.g. sup1, who sees ALL cases because case_scope_query returns {}) gets no 24h or reassignment alerts for cases they did not allocate (`if q and ...` skips them). Seeded or admin-created cases without assigned_supervisor_id therefore alert no supervisor at all. Decide whether unrestricted supervisors should be included."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "request-new submit failure", "issue": "When the server returns an error (upload, submit or 422), the catch block only sets errs and shows no toast, unlike client validation. The error box above Submit does show the message. Reference: app/request-new.tsx:73-74", "testID": "request-errors-bottom", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Supervisor Case Requests", "issues": ["The success toast reads 'Request: approve done', which sounds machine-generated. Suggest 'Approved and allocated to <agent> as CSV-xxxx'.", "The table still stays horizontally scrolled after approve (known, intentionally not changed)."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter5_scoping_fixes.py", "/app/backend/tests/test_iter4_requests_notifications.py", "/app/backend/tests/prep_ui_iter5.py", "/app/test_reports/pytest/iter5.xml"],
+  "action_items": [
+    "Validate due_at in approve (try/except, then 400 'Invalid SLA due date'), before core.next_seq is called.",
+    "Optional: include unrestricted (empty-scope) supervisors in notify_case_supervisors, or fall back to them when no scoped or assigned supervisor matches, so 24h alerts are never dropped.",
+    "Optional: call showToast(error) in the request-new catch block and use friendlier approve toast copy."
+  ],
+  "critical_code_review_comments": [
+    "case/[id], report/[caseId] and camera are still outside RoleGate. Deep linking /case/{id} now works, because api.ts reads the stored token by default, but these screens still do not redirect a signed-out user.",
+    "scoped_query: ObjectId(i) on scope.client_ids would raise 500 if a scope contains a malformed id (requests_routes.py:89)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter5_scoping_fixes.py (new)", "/app/backend/tests/prep_ui_iter5.py (new)", "/app/backend/tests/test_iter4_requests_notifications.py (accept then reassign now expects 400, matching the new duplicate guard)"],
+  "success_rate": {"backend": "97% (29/30)", "frontend": "100% of retested flows"},
+  "seed_data_creation": "Created 1 TEST_SupB_<sfx> supervisor (scope states=[Karnataka]), then deactivated it, because there is no delete endpoint. Created TEST_ case_requests by agent1 (they remain as 'assigned'). Created notifications for agent1, agent2, sup1 and TEST_SupB. Deleted all created cases by id (pytest teardown, plus CSV-000087 and CSV-000088 from the UI runs). Seed data and test accounts were not modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iter5_scoping_fixes.py tests/test_iter4_requests_notifications.py -p no:xdist -o addopts=''. Both clean up their cases by id. iter5 creates a scoped TEST supervisor, which needs a change-password step after login. Direct page.goto to agent screens now works. Use '[data-testid=...]:visible' because of duplicated DOM. To force a submit failure use page.route('**/api/requests/*/submit')."
+}

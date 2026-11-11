@@ -7,7 +7,7 @@ import { SelectField, TextField } from "@/src/components/fields";
 import { Btn, Card, DisplayRow, Loading, Screen, SectionTitle, showToast } from "@/src/components/ui";
 import { makeStyles, spacing, typography } from "@/src/theme";
 
-export default function MasterData() {
+export default function MasterData({ section = "all" }: { section?: "all" | "clients" | "settings" }) {
   const queryClient = useQueryClient();
   const styles = useStyles();
 
@@ -70,8 +70,9 @@ export default function MasterData() {
 
   return (
     <Screen testID="admin-master-screen">
-      <Text style={styles.title}>Master Data & Settings</Text>
+      <Text style={styles.title}>{section === "clients" ? "Clients and Branches" : section === "settings" ? "Settings" : "Master Data & Settings"}</Text>
 
+      {section !== "settings" ? (<>
       <Card>
         <SectionTitle>Clients</SectionTitle>
         {(clientsQ.data?.items ?? []).map((c: any) => (
@@ -118,6 +119,9 @@ export default function MasterData() {
         <DisplayRow label="Cities" value={(regionsQ.data?.cities ?? []).join(", ") || "-"} />
       </Card>
 
+      </>
+      ) : null}
+      {section !== "clients" ? (
       <Card>
         <SectionTitle>System Settings</SectionTitle>
         <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
@@ -156,6 +160,7 @@ export default function MasterData() {
         />
         <Btn label="Save Settings" onPress={saveSettings} loading={busy} testID="save-settings-btn" full />
       </Card>
+      ) : null}
       <View style={{ height: spacing.xl }} />
     </Screen>
   );
