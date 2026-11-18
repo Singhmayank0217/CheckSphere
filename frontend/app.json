@@ -50,7 +50,9 @@
       "expo-web-browser",
       "expo-status-bar",
       "@react-native-vector-icons/ionicons",
-      "expo-notifications"
+      "expo-notifications",
+      "./plugins/withLanCleartext",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true

@@ -6,7 +6,25 @@ import security
 from report_config import REPORT_TYPES
 
 
+LOCAL_DB_HOSTS = ("localhost", "127.0.0.1", "[::1]")
+
+
+def seeding_allowed() -> bool:
+    """Demo accounts have published passwords, so they may ONLY ever be created in a database on this computer
+    (the throwaway databases of backend/tests). Never on Atlas or any hosted database, whatever SEED_DEMO_DATA says,
+    and never when the environment is marked as production."""
+    import os
+    url = core.mongo_url.lower()
+    rest = url.split("://", 1)[-1]
+    host = rest.split("/")[0].split("?")[0].split("@")[-1].split(",")[0]
+    hostname = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
+    prod = (os.environ.get("APP_ENV") or os.environ.get("MEDIA_FOLDER_ENV") or "").strip().lower() in ("prod", "production")
+    return url.startswith("mongodb://") and hostname in LOCAL_DB_HOSTS and not prod
+
+
 async def seed_if_empty() -> bool:
+    if not seeding_allowed():
+        raise RuntimeError("Demo seeding refused: only allowed on a local throwaway database (never on Atlas/production)")
     if await core.db.users.count_documents({}) > 0:
         return False
 

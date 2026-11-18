@@ -11,7 +11,9 @@ import { makeStyles, spacing, useTheme } from "@/src/theme";
 const ITEMS = [
   { label: "Home", icon: "home-outline", to: "/home" },
   { label: "My Assigned Cases", icon: "list-outline", to: "/cases?filter=assigned" },
-  { label: "Request New Verification", icon: "add-circle-outline", to: "/request-new" },
+  { label: "Upload New Cases", icon: "cloud-upload-outline", to: "/upload-cases" },
+  { label: "Create New Verification", icon: "create-outline", to: "/create-verification" },
+  { label: "Allocate New Verification", icon: "add-circle-outline", to: "/request-new" },
   { label: "Drafts / In Progress", icon: "document-outline", to: "/cases?filter=assigned" },
   { label: "Returned for Correction", icon: "return-down-back-outline", to: "/cases?filter=returned" },
   { label: "Submitted Cases", icon: "checkmark-done-outline", to: "/cases?filter=submitted" },
@@ -62,7 +64,7 @@ export function AgentMenuButton() {
         <Pressable style={[styles.overlay, { justifyContent: "center", padding: spacing.xl }]} onPress={() => setHelp(false)}>
           <View style={styles.help} testID="help-modal">
             <Text style={styles.brand}>Help</Text>
-            <Text style={styles.helpText}>• Start the visit at the location so GPS is captured.{"\n"}• Photos must be taken with the in-app camera.{"\n"}• Write factual observations only.{"\n"}• Drafts save encrypted on the phone and sync automatically.{"\n"}• Use Request New Verification to raise a case; your supervisor allocates it.{"\n"}• Contact your supervisor for account or allocation issues.</Text>
+            <Text style={styles.helpText}>• Start the visit at the location so GPS is captured.{"\n"}• Photos must be taken with the in-app camera.{"\n"}• Write factual observations only.{"\n"}• Drafts save encrypted on the phone and sync automatically.{"\n"}• Use Allocate New Verification to raise a case for your supervisor to allocate, or Create New Verification to start one yourself.{"\n"}• Contact your supervisor for account or allocation issues.</Text>
           </View>
         </Pressable>
       </Modal>

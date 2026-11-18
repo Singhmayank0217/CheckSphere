@@ -8,6 +8,7 @@ import { uploadForm } from "@/src/utils/upload";
 import { storage } from "@/src/utils/storage";
 import { SelectField, TextField } from "@/src/components/fields";
 import { Banner, Btn, Card, Screen, SectionTitle, showToast } from "@/src/components/ui";
+import { useSession } from "@/src/session";
 import { makeStyles, spacing, typography } from "@/src/theme";
 
 const BLANK = {
@@ -15,7 +16,14 @@ const BLANK = {
   report_type: "", assigned_address: "", pincode: "", bank_state: "", verification_state: "", city: "", state: "", priority: "Medium", due_at: "", notes: "",
 };
 
+// Shared by Super Admin ("Create / Import Cases") and Supervisor ("Create New Case"). A Supervisor must choose the
+// agent; the backend enforces that and the Supervisor's scope. Excel import stays Super Admin only.
 export default function NewCases() {
+  const { user } = useSession();
+  const isSupervisor = user?.role === "supervisor";
+  const [agentId, setAgentId] = useState("");
+  const agentsQ = useQuery({ queryKey: ["agents"], queryFn: () => api<{ items: any[] }>("/users?role=agent") });
+  const agents = (agentsQ.data?.items ?? []).filter((a: any) => !a.disabled);
   const queryClient = useQueryClient();
   const styles = useStyles();
   const [form, setForm] = useState<any>({ ...BLANK });
@@ -32,8 +40,12 @@ export default function NewCases() {
   const set = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
   const create = async () => {
-    if (!clientId || !form.client_case_id || !form.applicant_name || !form.report_type || !form.assigned_address || !form.primary_phone) {
-      showToast("Client, Client Case ID, Applicant, Primary Contact, Report Type and Address are required", "error");
+    if (!clientId || !form.applicant_name || !form.report_type || !form.assigned_address || !form.primary_phone) {
+      showToast("Client, Applicant, Primary Contact, Report Type and Address are required", "error");
+      return;
+    }
+    if (isSupervisor && !agentId) {
+      showToast("Select the agent to assign this case to", "error");
       return;
     }
     if (form.pincode && !/^\d{6}$/.test(form.pincode)) {
@@ -48,11 +60,13 @@ export default function NewCases() {
           ...form,
           client_id: clientId,
           branch_id: branchId || null,
+          agent_id: agentId || null,
           due_at: form.due_at ? new Date(form.due_at + "T18:00:00Z").toISOString() : null,
         },
       });
-      showToast("Case created", "success");
+      showToast(agentId ? "Case created and assigned" : "Case created", "success");
       setForm({ ...BLANK });
+      setAgentId("");
       queryClient.invalidateQueries({ queryKey: ["admin-cases"] });
       queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
     } catch (e: any) {
@@ -108,7 +122,7 @@ export default function NewCases() {
 
   return (
     <Screen testID="admin-new-cases-screen">
-      <Text style={styles.title}>Create & Import Cases</Text>
+      <Text style={styles.title}>{isSupervisor ? "Create New Case" : "Create & Import Cases"}</Text>
 
       <Card>
         <SectionTitle>Manual Case Creation</SectionTitle>
@@ -138,7 +152,7 @@ export default function NewCases() {
               onChange={(v) => set("priority", v)} testID="new-case-priority-select" />
           </View>
         </View>
-        <TextField label="Client Case ID *" value={form.client_case_id} onChange={(v) => set("client_case_id", v)} testID="new-case-client-case-id" />
+        <TextField label="Client / External Case ID (optional — the Internal Case ID is generated automatically)" value={form.client_case_id} onChange={(v) => set("client_case_id", v)} testID="new-case-client-case-id" />
         <View style={styles.row}>
           <View style={styles.col}><TextField label="Applicant Name *" value={form.applicant_name} onChange={(v) => set("applicant_name", v)} testID="new-case-applicant-input" /></View>
           <View style={styles.col}><TextField label="Co-applicant Name" value={form.co_applicant_name} onChange={(v) => set("co_applicant_name", v)} testID="new-case-coapplicant-input" /></View>
@@ -159,10 +173,15 @@ export default function NewCases() {
           <View style={styles.col}><TextField label="SLA Due (YYYY-MM-DD)" value={form.due_at} onChange={(v) => set("due_at", v)} testID="new-case-due-input" /></View>
         </View>
         <TextField label="Notes" value={form.notes} onChange={(v) => set("notes", v)} multiline testID="new-case-notes-input" />
-        <Btn label="Create Case" onPress={create} loading={busy} testID="new-case-submit-btn" full />
+        <SelectField label={isSupervisor ? "Assign to Agent *" : "Assign to Agent (optional)"}
+          value={agents.find((a: any) => a.id === agentId) ? `${agents.find((a: any) => a.id === agentId).name} (${agents.find((a: any) => a.id === agentId).agent_id ?? ""})` : ""}
+          options={agents.map((a: any) => `${a.name} (${a.agent_id ?? ""})`)}
+          onChange={(v) => setAgentId(agents.find((a: any) => `${a.name} (${a.agent_id ?? ""})` === v)?.id ?? "")}
+          testID="new-case-agent-select" />
+        <Btn label={agentId ? "Create & Assign Case" : "Create Case"} onPress={create} loading={busy} testID="new-case-submit-btn" full />
       </Card>
 
-      <Card>
+      {!isSupervisor ? <Card>
         <SectionTitle>Excel Import</SectionTitle>
         <Text style={styles.help}>
           Download the template, fill one case per row (Client Name and Report Type must match existing masters),
@@ -184,7 +203,7 @@ export default function NewCases() {
             ) : null}
           </View>
         ) : null}
-      </Card>
+      </Card> : null}
     </Screen>
   );
 }

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Linking, Pressable, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState, Linking, Pressable, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
@@ -7,14 +7,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as NetInfo from "@react-native-community/netinfo";
 
 import { api } from "@/src/api";
-import { SelectField, SwitchRow, TextField } from "@/src/components/fields";
+import { DateField, MultiSelectField, SelectField, SwitchRow, TextField } from "@/src/components/fields";
 import { MiniMap } from "@/src/components/MiniMap";
-import { PhotoSlots } from "@/src/components/PhotoSlots";
+import { PhotoSlots, photoCompletion } from "@/src/components/PhotoSlots";
 import { Banner, BackHeader, Btn, Card, DisplayRow, ErrorBox, FLAG_LABELS, Loading, Screen, SectionTitle, StatusPill, showToast } from "@/src/components/ui";
 import { useSession } from "@/src/session";
-import { getGps } from "@/src/utils/geo";
+import { fmtDob } from "@/src/utils/dates";
+import { fmtIST, getGps, GPS_HELP, openLocationSettings, referenceSummary } from "@/src/utils/geo";
+import { discardUpload, listPending, onQueueChange, PendingUpload, processPendingUploads, retryUpload } from "@/src/utils/pendingUploads";
 import { markDraftSynced, readLocalDraft, saveLocalDraft } from "@/src/utils/drafts";
 import { makeStyles, radius, spacing, typography } from "@/src/theme";
+import { TYPES as REQUEST_TYPES } from "../request-new";
 
 const PHONE_RESULTS = ["Confirmed", "Busy", "No Response", "Switched Off", "Call Later", "Invalid Number", "Refused", "Other"];
 
@@ -42,6 +45,8 @@ export default function ReportScreen() {
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [restored, setRestored] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
+  const [gpsStatus, setGpsStatus] = useState<string | null>(null);
   const [call, setCall] = useState<any>({ phone_number: "", result: "", person_met: "", relationship: "", info_confirmed: "", notes: "" });
   const [savingCall, setSavingCall] = useState(false);
 
@@ -50,21 +55,54 @@ export default function ReportScreen() {
   const report = ctxQ.data?.report;
   const canEdit = !!ctxQ.data?.can_edit;
   const isAgent = user?.role === "agent";
+  const isDraft = !!caseData?.is_draft; // Create New Verification before Submit: not a case yet, no Internal Case ID
 
+  // The form is initialised ONCE per case. Later refreshes of the case data (after every photo upload, the
+  // background upload queue, pull-to-refresh) must never rebuild the form, or values typed since the last save
+  // are lost. Every change is also autosaved as an encrypted local draft, so leaving the screen, opening the
+  // camera, the app going to the background or a remount restores exactly what was entered.
+  const initedForRef = useRef<string | null>(null);
+  const dirtyRef = useRef(false);
+  const stopAutosaveRef = useRef(false);
+  const latestRef = useRef<{ data: Record<string, any>; gps: any; declaration: boolean }>({ data: {}, gps: null, declaration: false });
+  useEffect(() => { latestRef.current = { data, gps, declaration }; }, [data, gps, declaration]);
   const setField = useCallback((key: string, v: any) => {
+    dirtyRef.current = true;
     setData((prev) => ({ ...prev, [key]: v }));
   }, []);
+
+  const flushLocal = useCallback(async () => {
+    if (!caseId || initedForRef.current !== caseId || !dirtyRef.current || stopAutosaveRef.current) return;
+    dirtyRef.current = false;
+    const l = latestRef.current;
+    try {
+      await saveLocalDraft(caseId, { data: l.data, gps: l.gps ?? {}, declaration: l.declaration });
+    } catch {
+      dirtyRef.current = true; // try again on the next change
+    }
+  }, [caseId]);
+  useEffect(() => {
+    if (initedForRef.current !== caseId || !dirtyRef.current) return;
+    const t = setTimeout(flushLocal, 600);
+    return () => clearTimeout(t);
+  }, [data, gps, declaration, caseId, flushLocal]);
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (st) => { if (st !== "active") flushLocal(); });
+    return () => { sub.remove(); flushLocal(); }; // also on unmount
+  }, [flushLocal]);
 
   const captureGps = useCallback(async () => {
     setGpsBusy(true);
     setGpsError(null);
     const r = await getGps();
     setGpsBusy(false);
+    setGpsStatus(r.status);
     if (r.ok) {
+      dirtyRef.current = true;
       setGps({ lat: r.lat, lon: r.lon, accuracy: r.accuracy });
       if (config?.requires_gps && caseData && !caseData.visit) {
         try {
-          await api(`/cases/${caseId}/visit-start`, { method: "POST", body: { lat: r.lat, lon: r.lon, accuracy: r.accuracy } });
+          await api(`/cases/${caseId}/visit-start`, { method: "POST", body: { lat: r.lat, lon: r.lon, accuracy: r.accuracy, mocked: r.mocked, fix_at: r.fixAt } });
           queryClient.invalidateQueries({ queryKey: ["report", caseId] });
           queryClient.invalidateQueries({ queryKey: ["case", caseId] });
         } catch {
@@ -76,32 +114,57 @@ export default function ReportScreen() {
     }
   }, [caseData, caseId, config, queryClient]);
 
-  // Initialise form data: prefill < server draft < local unsynced draft
+  const refreshPendingUploads = useCallback(async () => {
+    if (caseId) setPendingUploads(await listPending(caseId));
+  }, [caseId]);
   useEffect(() => {
-    if (!ctxQ.data || !caseData) return;
+    // load this case's queued photos on open and whenever the queue changes (async storage read)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refreshPendingUploads();
+    return onQueueChange(() => { refreshPendingUploads(); });
+  }, [refreshPendingUploads]);
+  useEffect(() => {
+    if (netInfo.isConnected === false) return;
+    processPendingUploads(token).then((n) => {
+      if (n > 0) {
+        queryClient.invalidateQueries({ queryKey: ["report", caseId] });
+        showToast(`${n} saved photo(s) uploaded`, "success");
+      }
+    });
+  }, [netInfo.isConnected, token, caseId, queryClient]);
+
+  // Initialise form data ONCE per case: prefill < server draft < local unsynced draft (see initedFor above)
+  useEffect(() => {
+    if (!ctxQ.data || !caseData || initedForRef.current === caseId) return;
+    initedForRef.current = caseId!;
     (async () => {
       const prefill: Record<string, any> = {
         client_name: caseData.client_name ?? "",
         branch_name: caseData.branch_name ?? "",
-        internal_case_id: caseData.internal_case_id ?? "",
+        internal_case_id: caseData.is_draft ? "" : caseData.internal_case_id ?? "",
         client_case_id: caseData.client_case_id ?? "",
         applicant_name: caseData.applicant_name ?? "",
         co_applicant_name: caseData.co_applicant_name ?? "",
         agent_name: `${user?.name ?? ""} (${user?.agent_id ?? "staff"})`,
-        visit_datetime: new Date().toLocaleString(),
       };
+      // VEE fields that start from a value already on the case (e.g. Type of Loan); the agent can correct them
+      for (const s of config?.sections ?? []) {
+        for (const f of s.fields ?? []) {
+          if (f.prefill_case && caseData[f.prefill_case]) prefill[f.key] = String(caseData[f.prefill_case]);
+        }
+      }
       const serverDraft = report && report.status === "draft" ? report : null;
       let base = { ...prefill, ...(serverDraft?.data ?? {}) };
       let dec = !!serverDraft?.declaration;
       let g = serverDraft?.gps?.lat ? serverDraft.gps : null;
       const local = await readLocalDraft(caseId!);
-      if (local && !local.synced) {
+      if (local && !local.synced && local.caseId === caseId) {
         base = { ...base, ...local.data };
         dec = local.declaration;
         if (local.gps?.lat) g = local.gps;
         setRestored(true);
       }
-      setData(base);
+      setData((prev) => (dirtyRef.current ? { ...base, ...prev } : base)); // anything typed while the draft was loading wins
       setDeclaration(dec);
       if (g) setGps(g);
       if (!g && config?.requires_gps) await captureGps();
@@ -112,6 +175,7 @@ export default function ReportScreen() {
   if (ctxQ.isError || !ctxQ.data) return <Screen><ErrorBox message="Failed to load the verification form." onRetry={() => ctxQ.refetch()} /></Screen>;
 
   const evidence = ctxQ.data.evidence ?? [];
+  const serverGps = ctxQ.data.server_gps ?? null;
   const callLogs = ctxQ.data.call_logs ?? [];
   const online = netInfo.isConnected !== false;
 
@@ -142,21 +206,39 @@ export default function ReportScreen() {
   };
 
   const onSubmit = async () => {
-    if (!canEdit) return;
+    if (!canEdit || submitting) return;
+    const { missing } = photoCompletion(config?.photo_slots ?? [], evidence);
+    const localProblems = [
+      ...(pendingUploads.length ? [`${pendingUploads.length} photo(s) are still waiting to upload. Connect to the internet and wait for them to finish.`] : []),
+      ...missing.map((m: any) => `Required photo missing: ${m.label}`),
+    ];
+    if (localProblems.length) {
+      setProblems(localProblems);
+      return;
+    }
     setSubmitting(true);
     setProblems(null);
     try {
+      dirtyRef.current = false;
       await saveLocalDraft(caseId!, { data, gps: gps ?? {}, declaration });
       if (online) {
-        await api(`/reports/case/${caseId}/submit`, {
-          method: "POST",
-          body: { data, gps: gps ?? {}, declaration, offline_synced: false },
-        });
+        let created: string | null = null;
+        try {
+          const res = await api<any>(`/reports/case/${caseId}/submit`, {
+            method: "POST",
+            body: { data, gps: gps ?? {}, declaration, offline_synced: false },
+          });
+          if (res?.case_created) created = res.internal_case_id;
+        } catch (err: any) {
+          if (err?.status !== 409) throw err; // 409 = an earlier tap/retry already submitted it: nothing is duplicated
+        }
+        stopAutosaveRef.current = true; // submitted: nothing may re-create a local draft for this case
         await markDraftSynced(caseId!);
         queryClient.invalidateQueries({ queryKey: ["report", caseId] });
         queryClient.invalidateQueries({ queryKey: ["case", caseId] });
         queryClient.invalidateQueries({ queryKey: ["agent-cases"] });
-        showToast("Report submitted for review", "success");
+        queryClient.invalidateQueries({ queryKey: ["agent-drafts"] });
+        showToast(created ? `Case ${created} created and submitted for review` : "Report submitted for review", "success");
         router.replace("/(agent)/cases");
       } else {
         showToast("No internet — draft saved offline. It will sync automatically.", "error");
@@ -207,10 +289,35 @@ export default function ReportScreen() {
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>{config?.name ?? "Verification Report"}</Text>
-            <Text style={styles.subtitle}>{caseData?.internal_case_id} · {caseData?.applicant_name}</Text>
+            <Text style={styles.subtitle}>{isDraft ? "New verification · Internal Case ID is generated when you submit" : `${caseData?.internal_case_id} · ${caseData?.applicant_name ?? ""}`}</Text>
           </View>
-          <StatusPill status={caseData?.status} testID="report-case-status" />
+          {isDraft ? null : <StatusPill status={caseData?.status} testID="report-case-status" />}
         </View>
+
+        {caseData?.source === "agent_created" ? (
+          <Card>
+            <SectionTitle>Request Type</SectionTitle>
+            {editable && !evidence.length ? (
+              <SelectField label="Request type *" value={caseData.request_type} options={REQUEST_TYPES} testID="req-type-select"
+                onChange={async (v) => {
+                  if (v === caseData.request_type) return;
+                  try {
+                    await api(`/cases/${caseId}/request-type`, { method: "POST", body: { request_type: v } });
+                    queryClient.invalidateQueries({ queryKey: ["report", caseId] });
+                    queryClient.invalidateQueries({ queryKey: ["case", caseId] });
+                    showToast(`Request type changed to ${v}`, "success");
+                  } catch (e: any) {
+                    showToast(e?.message ?? "Could not change the request type", "error");
+                  }
+                }} />
+            ) : (
+              <DisplayRow label="Request type" value={caseData.request_type} />
+            )}
+            <Text style={styles.gpsStamp}>
+              {isDraft ? "Not submitted yet — no case exists until you press Submit Report." : "Created by you (Create New Verification)."} {editable && evidence.length ? "The type is fixed once photos are captured." : ""}
+            </Text>
+          </Card>
+        ) : null}
 
         {caseData?.status === "returned" && report?.review_comment ? (
           <Banner tone="error" message={`Supervisor correction comments: ${report.review_comment}`} />
@@ -218,7 +325,7 @@ export default function ReportScreen() {
         {caseData && !["new", "assigned", "in_progress", "returned"].includes(caseData.status) && caseData.status !== "returned" ? (
           <Banner tone="info" message={`Report is ${caseData.status.replace("_", " ")} and locked for editing. It will reopen if the supervisor returns it.`} />
         ) : null}
-        {restored ? <Banner tone="warning" message="Restored an unsynced offline draft from this device." /> : null}
+        {restored ? <Banner tone="info" message="Restored the entries saved on this phone (not yet synced to the server)." /> : null}
         {!online ? <Banner tone="warning" message="You are offline. Drafts are saved encrypted on this device and sync automatically." /> : null}
         {(caseData?.flags ?? []).length > 0 ? (
           <Banner tone="warning" message={`Supervisor review flags: ${caseData.flags.map((f: string) => FLAG_LABELS[f] ?? f).join(", ")}`} />
@@ -234,23 +341,50 @@ export default function ReportScreen() {
 
         {config?.requires_gps ? (
           <Card>
-            <SectionTitle action={
-              <Btn label={gps ? "Refresh GPS" : "Capture GPS"} variant="secondary" small onPress={captureGps} loading={gpsBusy} testID="capture-gps-btn" />
-            }>
-              GPS Evidence
+            <SectionTitle action={!caseData?.visit && editable ? (
+              <Btn label="Record Visit Start" variant="secondary" small onPress={captureGps} loading={gpsBusy} testID="capture-gps-btn" />
+            ) : undefined}>
+              GPS Evidence (from this phone, not editable)
             </SectionTitle>
-            {gps ? (
+            {serverGps?.lat != null ? (
               <View>
-                <MiniMap lat={gps.lat} lon={gps.lon} accuracy={gps.accuracy} height={150} testID="gps-map" />
-                <Text style={styles.gpsStamp}>
-                  {caseData?.visit ? `Visit started ${new Date(caseData.visit.started_at).toLocaleString()}` : "Visit start not recorded"}
+                <MiniMap lat={serverGps.lat} lon={serverGps.lon} accuracy={serverGps.accuracy} height={150} testID="gps-map" />
+                <Text style={styles.gpsStamp} testID="gps-readout">
+                  {Number(serverGps.lat).toFixed(6)}, {Number(serverGps.lon).toFixed(6)} · ±{Math.round(serverGps.accuracy ?? 0)} m
+                  {serverGps.source === "photo" ? ` · from photo captured ${fmtIST(serverGps.captured_at)}` : ` · visit start ${fmtIST(serverGps.captured_at)}`}
                 </Text>
               </View>
             ) : (
-              <Text style={styles.gpsStamp}>{gpsError ?? "GPS will be captured automatically."}</Text>
+              <Text style={styles.gpsStamp}>GPS is recorded automatically with each photo when you press the shutter.</Text>
             )}
+            {caseData?.visit ? <Text style={styles.gpsStamp}>Visit started {fmtIST(caseData.visit.started_at)}</Text> : null}
+            {caseData?.assigned_address ? (
+              <Text style={styles.gpsStamp}>Assigned address: {String(caseData.assigned_address).replace(/\s*\n\s*/g, ", ")}</Text>
+            ) : null}
+            <Text style={[styles.gpsStamp, !referenceSummary(caseData).ok && { color: "#9C6B14" }]} testID="case-reference">
+              {referenceSummary(caseData).text}
+            </Text>
+            {(() => {
+              // latest photo's own check: captured address (reverse-geocoded from its GPS), distance, accuracy, assessment
+              const last = evidence.find((e: any) => e.kind === "photo" && e.location_check);
+              if (!last) return null;
+              const lc = last.location_check;
+              const verdict: Record<string, string> = { within: "within range", uncertain: "UNCERTAIN", outside: "OUTSIDE the allowed distance", no_reference: "NOT CHECKED (no case reference location)" };
+              return (
+                <Text style={styles.gpsStamp} testID="latest-location-check">
+                  Latest photo ({last.slot ?? "photo"}): captured near {last.photo_address?.text ?? "address unavailable"}
+                  {lc.distance_m != null ? ` · ${Math.round(lc.distance_m)} m from the case location (allowed ${Math.round(lc.allowed_m ?? 0)} m)` : ""}
+                  {last.gps?.accuracy != null ? ` · GPS ±${Math.round(last.gps.accuracy)} m` : ""}
+                  {` · Assessment: ${verdict[lc.status] ?? lc.status}.`}{lc.status !== "within" && lc.explanation ? ` ${lc.explanation}` : ""}
+                </Text>
+              );
+            })()}
             {gpsError ? (
-              <Btn label="Open Settings" variant="secondary" small onPress={() => Linking.openSettings()} testID="gps-open-settings-btn" />
+              <View>
+                <Text style={styles.gpsStamp}>{gpsStatus ? GPS_HELP[gpsStatus as keyof typeof GPS_HELP] : gpsError}</Text>
+                <Btn label={gpsStatus === "services_disabled" ? "Open Location Settings" : "Open Settings"} variant="secondary" small
+                  onPress={() => (gpsStatus === "services_disabled" ? openLocationSettings() : Linking.openSettings())} testID="gps-open-settings-btn" />
+              </View>
             ) : null}
           </Card>
         ) : null}
@@ -259,8 +393,35 @@ export default function ReportScreen() {
           <Card key={si}>
             <SectionTitle>{section.title}</SectionTitle>
             {section.fields.map((f: any) => {
+              if (f.readonly && f.source === "case_address" && editable && caseData?.source === "agent_created") {
+                return (
+                  <TextField key={f.key} label={`${f.label} (address you are verifying)`} value={data[f.key] ?? caseData?.assigned_address}
+                    onChange={(v) => setField(f.key, v)} required multiline autoCapitalize="sentences" testID={`field-${f.key}`} />
+                );
+              }
+              if (f.readonly && f.source === "internal_case_id") {
+                return <DisplayRow key={f.key} label={`${f.label} · system generated`} value={isDraft ? "Generated automatically when you submit" : caseData?.internal_case_id} />;
+              }
+              if (f.readonly) {
+                const v = f.source === "case_address"
+                  ? caseData?.assigned_address
+                  : (report?.data?.[f.key] || "Recorded automatically from the device clock (IST)");
+                return <DisplayRow key={f.key} label={`${f.label} · fixed`} value={v} />;
+              }
               if (!editable) {
-                return <DisplayRow key={f.key} label={f.label} value={ctxQ.data.masked_data?.[f.key] ?? data[f.key]} />;
+                return <DisplayRow key={f.key} label={f.label} value={f.type === "date" ? fmtDob(ctxQ.data.masked_data?.[f.key] ?? data[f.key]) : ctxQ.data.masked_data?.[f.key] ?? data[f.key]} />;
+              }
+              if (f.type === "date") {
+                return (
+                  <DateField key={f.key} label={f.label} value={data[f.key]} onChange={(v) => setField(f.key, v)}
+                    required={f.required} maxToday={!!f.max_today} testID={`field-${f.key}`} />
+                );
+              }
+              if (f.type === "multiselect") {
+                return (
+                  <MultiSelectField key={f.key} label={f.label} value={data[f.key]} options={f.options ?? []}
+                    onChange={(v) => setField(f.key, v)} testID={`field-${f.key}`} />
+                );
               }
               if (f.type === "select") {
                 return (
@@ -293,7 +454,17 @@ export default function ReportScreen() {
 
         <Card>
           <SectionTitle>Photo Evidence (in-app camera only)</SectionTitle>
-          <PhotoSlots caseId={caseId!} slots={config?.photo_slots ?? []} evidence={evidence} canEdit={editable} token={token} />
+          <PhotoSlots
+            caseId={caseId!} slots={config?.photo_slots ?? []} evidence={evidence} canEdit={editable} token={token}
+            pending={pendingUploads}
+            onRetry={async (id) => {
+              const r = await retryUpload(id, token);
+              queryClient.invalidateQueries({ queryKey: ["report", caseId] });
+              if (r?.ok) showToast("Photo uploaded", "success");
+              else if (r) showToast(r.message, "error");
+            }}
+            onDiscard={async (id) => { await discardUpload(id); }}
+          />
         </Card>
 
         {config?.category === "telephone" ? (
@@ -302,7 +473,7 @@ export default function ReportScreen() {
             {callLogs.map((cl: any) => (
               <View key={cl.id} style={styles.callRow} testID={`call-log-${cl.id}`}>
                 <Text style={styles.callPhone}>{cl.phone_number}</Text>
-                <Text style={styles.callMeta}>{cl.result} · {new Date(cl.attempt_at).toLocaleString()}</Text>
+                <Text style={styles.callMeta}>{cl.result} · {fmtIST(cl.attempt_at)}</Text>
                 {cl.person_met ? <Text style={styles.callMeta}>Person: {cl.person_met} ({cl.relationship ?? "-"})</Text> : null}
                 {cl.notes ? <Text style={styles.callMeta}>{cl.notes}</Text> : null}
               </View>
@@ -328,7 +499,7 @@ export default function ReportScreen() {
             I have not added unsupported opinions or conclusions.&rdquo;
           </Text>
           {editable ? (
-            <SwitchRow label="I accept this declaration" value={declaration} onChange={setDeclaration} testID="declaration-switch" />
+            <SwitchRow label="I accept this declaration" value={declaration} onChange={(v) => { dirtyRef.current = true; setDeclaration(v); }} testID="declaration-switch" />
           ) : (
             <DisplayRow label="Declaration" value={report?.declaration ? "Accepted" : "Pending"} />
           )}

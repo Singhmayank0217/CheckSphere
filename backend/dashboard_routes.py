@@ -15,8 +15,7 @@ STATUS_ORDER = ["new", "assigned", "in_progress", "submitted", "under_review", "
 
 
 def _base_query(ctx, from_date, to_date, client_id, branch_id, state, city, agent_id, report_type):
-    query = {"deleted_at": None}
-    query.update(security.case_scope_query(ctx["user"]))
+    query = dict(core.LIVE_CASE_FILTER)
     if client_id:
         query["client_id"] = client_id
     if branch_id:
@@ -36,7 +35,8 @@ def _base_query(ctx, from_date, to_date, client_id, branch_id, state, city, agen
         if to_date:
             rng["$lte"] = datetime.fromisoformat(to_date).replace(tzinfo=timezone.utc)
         query["created_at"] = rng
-    return query
+    scope = security.case_scope_query(ctx["user"])
+    return {"$and": [query, scope]} if scope else query
 
 
 @router.get("/dashboard/stats")
@@ -76,7 +76,8 @@ async def stats(request: Request, from_date: str | None = None, to_date: str | N
     cities = group("city")
 
     sup_stats = defaultdict(lambda: {"approved": 0, "returned": 0, "inconclusive": 0, "exception": 0})
-    async for r in core.db.reports.find({"status": {"$in": ["approved", "returned", "inconclusive", "exception"]}}):
+    hidden = [str(c["_id"]) async for c in core.db.cases.find({"deleted_at": {"$ne": None}}, {"_id": 1})]  # soft-deleted cases
+    async for r in core.db.reports.find({"status": {"$in": ["approved", "returned", "inconclusive", "exception"]}, "case_id": {"$nin": hidden}}):
         name = r.get("reviewed_by_name")
         if name:
             key = {"approved": "approved", "returned": "returned", "inconclusive": "inconclusive", "exception": "exception"}.get(r["status"])

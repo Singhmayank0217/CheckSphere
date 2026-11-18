@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { api, downloadFile } from "@/src/api";
-import { SelectField } from "@/src/components/fields";
-import { Btn, FLAG_LABELS, PriorityPill, STATUS_LABELS, StatusPill, showToast } from "@/src/components/ui";
+import { SelectField, TextField } from "@/src/components/fields";
+import { Banner, Btn, FLAG_LABELS, PopupModal, PriorityPill, STATUS_LABELS, StatusPill, showToast } from "@/src/components/ui";
+import { fmtIST } from "@/src/utils/geo";
 import { usePortalBase } from "@/src/portal/base";
 import { DataTable, type Column } from "@/src/portal/DataTable";
 import { Page, Panel } from "@/src/portal/Page";
@@ -39,6 +40,20 @@ export default function CasesPage({ preset }: { preset?: "review" }) {
   const [sort, setSort] = useState("created_at");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
+  const qc = useQueryClient();
+  const [deletedOpen, setDeletedOpen] = useState(false);
+  const [restoreId, setRestoreId] = useState<string | null>(null);
+  const [restoreReason, setRestoreReason] = useState("");
+  const deletedQ = useQuery({ queryKey: ["deleted-cases"], queryFn: () => api<{ items: any[]; total: number }>("/cases-deleted"), enabled: isAdmin && deletedOpen });
+  const restore = async () => {
+    if (!restoreId) return;
+    try {
+      await api(`/cases/${restoreId}/restore`, { method: "POST", body: { reason: restoreReason.trim() } });
+      showToast("Case restored", "success");
+      setRestoreId(null); setRestoreReason("");
+      ["deleted-cases", "admin-cases", "admin-stats"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+    } catch (e: any) { showToast(e?.message ?? "Restore failed", "error"); }
+  };
 
   useEffect(() => {
     const init = { ...EMPTY, ...Object.fromEntries(Object.entries(params).filter(([k]) => k in EMPTY)) } as Record<string, string>;
@@ -84,7 +99,7 @@ export default function CasesPage({ preset }: { preset?: "review" }) {
 
   const columns: Column<any>[] = [
     { key: "internal_case_id", label: "Case ID", width: 130, sortable: true, render: (c) => <Text style={styles.idText}>{c.internal_case_id}</Text> },
-    { key: "client_case_id", label: "Client Case ID", width: 130 },
+    { key: "client_case_id", label: "Client / External ID", width: 140, render: (c) => <Text style={styles.cellText}>{c.client_case_id || "—"}</Text> },
     { key: "applicant_name", label: "Applicant", width: 170, sortable: true, render: (c) => <Text style={styles.cellText} numberOfLines={3}>{c.applicant_name}{c.co_applicant_name || c.seller_name ? <Text style={styles.sub}>{"\n"}{[c.co_applicant_name, c.seller_name].filter(Boolean).join(" / ")}</Text> : null}</Text> },
     { key: "primary_phone", label: "Contact", width: 130, render: (c) => <Text style={styles.cellText}>{c.primary_phone ?? "—"}{c.alt_phone ? <Text style={styles.sub}>{"\n"}{c.alt_phone}</Text> : null}</Text> },
     { key: "client_name", label: "Client / Branch", width: 200, sortable: true, render: (c) => <Text style={styles.cellText} numberOfLines={3}>{c.client_name}{"\n"}<Text style={styles.sub}>{c.branch_name ?? "—"}{c.bank_state ? ` · ${c.bank_state}` : ""}</Text></Text> },
@@ -113,6 +128,7 @@ export default function CasesPage({ preset }: { preset?: "review" }) {
         actions={<>
           {isAdmin ? <Btn label="Create / Import" variant="secondary" onPress={() => router.push("/admin/create" as any)} testID="cases-create-btn" /> : null}
           <Btn label="Export Excel" variant="secondary" onPress={exportXlsx} testID="cases-export-btn" />
+          {isAdmin && preset !== "review" ? <Btn label="Deleted Cases" variant="ghost" onPress={() => setDeletedOpen(true)} testID="cases-deleted-btn" /> : null}
         </>}
       />
       <Panel title="Filters" right={<View style={{ flexDirection: "row", gap: spacing.sm }}>
@@ -153,6 +169,27 @@ export default function CasesPage({ preset }: { preset?: "review" }) {
         onPage={setPage}
         empty="No cases match these filters."
       />
+      {isAdmin ? (
+        <PopupModal visible={deletedOpen} wide title={`Deleted cases (${deletedQ.data?.total ?? 0})`} onClose={() => { setDeletedOpen(false); setRestoreId(null); }}>
+          <Banner tone="info" message="Soft-deleted by the Super Admin. Records, reports, photos and audit history are kept; restore returns the case to normal lists." />
+          {restoreId ? (
+            <View>
+              <TextField label="Reason for restoring (required)" value={restoreReason} onChange={setRestoreReason} testID="restore-reason-input" />
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                <Btn label="Restore case" small onPress={restore} disabled={restoreReason.trim().length < 3} testID="restore-confirm-btn" />
+                <Btn label="Cancel" small variant="ghost" onPress={() => setRestoreId(null)} testID="restore-cancel-btn" />
+              </View>
+            </View>
+          ) : null}
+          <DataTable testID="deleted-cases-table" rows={deletedQ.data?.items ?? []} loading={deletedQ.isLoading} empty="No deleted cases." columns={[
+            { key: "internal_case_id", label: "Case ID", width: 120 },
+            { key: "applicant_name", label: "Applicant", width: 150, render: (c) => <Text style={styles.cellText}>{c.applicant_name || "(blank)"}</Text> },
+            { key: "deleted_at", label: "Deleted", width: 170, render: (c) => <Text style={styles.cellText}>{fmtIST(c.deleted_at)}{" · "}<Text style={styles.sub}>by {c.deleted_by_name ?? "—"}</Text></Text> },
+            { key: "deleted_reason", label: "Reason", width: 220 },
+            { key: "id", label: "", width: 100, render: (c) => <Btn label="Restore" small variant="secondary" onPress={() => { setRestoreReason(""); setRestoreId(c.id); }} testID={`restore-${c.internal_case_id}`} /> },
+          ]} />
+        </PopupModal>
+      ) : null}
     </Page>
   );
 }

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
-import { loginRequest } from "@/src/api";
+import { API_URL, fetchWithWake, loginRequest } from "@/src/api";
+import { APP_BUILD } from "@/src/buildInfo";
 import { TextField } from "@/src/components/fields";
 import { Banner, Btn, Screen } from "@/src/components/ui";
 import { ShieldMark } from "@/src/components/WebLoader";
@@ -21,6 +22,12 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [serverBuild, setServerBuild] = useState<string>("checking…");
+  useEffect(() => {
+    // fetchWithWake: a sleeping server is woken by this probe and the "starting up" banner shows meanwhile
+    fetchWithWake(`${API_URL}/health`, {}).then((r) => r.json()).then((j) => setServerBuild(j?.build ?? "old server (no build id)"))
+      .catch(() => setServerBuild("unreachable"));
+  }, []);
 
   const onLogin = async () => {
     if (!identifier.trim() || !password) {
@@ -72,6 +79,7 @@ export default function Login() {
         <Text style={styles.footnote}>
           Accounts are created by the Super Admin. A temporary password must be changed at first login.
         </Text>
+        <Text style={styles.footnote} testID="build-info">App build {APP_BUILD} · Server {serverBuild} · {API_URL || "no backend URL"}</Text>
       </View>
     </Screen>
   );

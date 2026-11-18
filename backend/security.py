@@ -12,7 +12,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import core
 
-SECRET = os.environ.get("JWT_SECRET") or ""
+SECRET = (os.environ.get("JWT_SECRET") or "").strip()
+if len(SECRET) < 32:
+    raise RuntimeError("JWT_SECRET is missing or too short (min 32 chars). Set it in backend/.env — see backend/.env.example.")
 ISSUER = "checksphere"
 ACCESS_HOURS = int(os.environ.get("ACCESS_HOURS", "12"))
 SESSION_DAYS = 30
@@ -115,6 +117,8 @@ def case_public(c: dict) -> dict:
     d = core.clean(c)
     d["report_type_name"] = (REPORT_TYPES.get(d.get("report_type")) or {}).get("name", d.get("report_type"))
     d.pop("timeline", None)
+    import geocoding  # plain-language reason when the case has no usable reference location (None otherwise)
+    d["location_problem"] = geocoding.location_problem(c)
     return d
 
 
@@ -137,5 +141,7 @@ def case_scope_query(user: dict) -> dict:
             cons.append({"assigned_agent_id": {"$in": scope["agent_ids"]}})
         if not cons:
             return {}
+        # A scoped supervisor always sees the cases they created or supervise (incl. agent-created cases sent to them).
+        cons += [{"assigned_supervisor_id": str(user["_id"])}, {"created_by": str(user["_id"])}]
         return {"$or": cons} if len(cons) > 1 else cons[0]
     return {}

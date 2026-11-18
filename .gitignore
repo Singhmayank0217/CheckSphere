@@ -86,3 +86,21 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+
+# Environment templates are safe to commit
+!.env.example
+# Local in-app backup exports (contain personal data)
+backend/backups/
+
+# cleanup manifests list user names/emails and record ids; keep them out of Git
+docs/cleanup/
+
+# Android build outputs and signing material (never commit)
+*.apk
+*.aab
+*.jks
+*.keystore
+*.p12
+*.p8
+google-services.json
+service-account.json

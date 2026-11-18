@@ -6,6 +6,7 @@ import { api } from "@/src/api";
 import { MiniMap } from "@/src/components/MiniMap";
 import { Banner, BackHeader, Btn, Card, DisplayRow, ErrorBox, FLAG_LABELS, Loading, Screen, SectionTitle, StatusPill } from "@/src/components/ui";
 import { useSession } from "@/src/session";
+import { fmtIST } from "@/src/utils/geo";
 import { makeStyles, spacing } from "@/src/theme";
 
 export default function CaseDetail() {
@@ -39,18 +40,22 @@ export default function CaseDetail() {
         {c.co_applicant_name ? <DisplayRow label="Co-applicant" value={c.co_applicant_name} /> : null}
         <DisplayRow label="Client" value={c.client_name} />
         <DisplayRow label="Branch" value={c.branch_name} />
-        <DisplayRow label="Client Case ID" value={c.client_case_id} />
+        <DisplayRow label="Client / External Case ID" value={c.client_case_id || "Not provided"} />
         <DisplayRow label="Loan / Product" value={c.loan_type} />
         <DisplayRow label="Verification Type" value={c.report_type_name || c.report_type} />
         <DisplayRow label="Priority" value={c.priority} />
-        <DisplayRow label="Due" value={c.due_at ? new Date(c.due_at).toLocaleString() : "-"} />
+        <DisplayRow label="Due" value={c.due_at ? fmtIST(c.due_at) : "-"} />
       </Card>
 
       <Card>
-        <SectionTitle>Assigned Address</SectionTitle>
-        <Text style={styles.address}>{c.assigned_address}</Text>
+        <SectionTitle>Assigned Verification Address</SectionTitle>
+        <Text style={styles.address} testID="assigned-address">{c.assigned_address}</Text>
+        <Text style={styles.note}>{c.source === "agent_created"
+          ? "You created this verification; enter the address you are verifying in the verification form."
+          : "Fixed by your supervisor — it can't be changed in the app. If it is wrong, ask your supervisor to correct it."}</Text>
         <DisplayRow label="City" value={c.city} />
         <DisplayRow label="State" value={c.state} />
+        <DisplayRow label="Reference location" value={c.assigned_lat != null ? (c.location_source === "geocoded" ? `Approximate (address lookup${c.location_precision ? `, ${c.location_precision}` : ""})` : "Pinned by supervisor") : "Not available — distance can't be checked"} />
       </Card>
 
       {(c.flags ?? []).length > 0 ? (
@@ -89,6 +94,7 @@ export default function CaseDetail() {
 
 const useStyles = makeStyles((colors) => ({
   caseId: { fontSize: 20, fontWeight: "800", color: colors.onSurface, flex: 1, fontFamily: "PlusJakartaSans" },
-  address: { color: colors.onSurface, fontSize: 14, lineHeight: 20, marginBottom: 8 },
+  address: { color: colors.onSurface, fontSize: 14, lineHeight: 20, marginBottom: 4 },
+  note: { color: colors.muted, fontSize: 12, marginBottom: 8 },
   cta: { position: "absolute", left: spacing.lg, right: spacing.lg, bottom: 24 },
 }));

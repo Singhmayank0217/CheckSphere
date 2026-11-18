@@ -6,7 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { ErrorBoundary } from "@/src/components/error-boundary";
-import { ToastHost } from "@/src/components/ui";
+import { ServerWakeBanner, ToastHost } from "@/src/components/ui";
 import { queryClient } from "@/src/query-client";
 import { SessionProvider } from "@/src/session";
 
@@ -25,6 +25,7 @@ export default function RootLayout() {
             <SessionProvider>
               <Stack screenOptions={{ headerShown: false }} />
               <ToastHost />
+              <ServerWakeBanner />
             </SessionProvider>
           </KeyboardProvider>
         </QueryClientProvider>

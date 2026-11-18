@@ -1,5 +1,6 @@
 """Agent case requests, in-app notifications, agent accept/reassign, pending-case alerts."""
 import asyncio
+import hashlib
 import logging
 import re
 from datetime import timedelta
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 
 import core
 import security
+import geocoding
 import storage_service
 from cases_routes import get_case_or_404, tl
 
@@ -19,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 REQ_TYPES = {"Residence Verification": "residence_applicant", "Office Verification": "office_coapplicant",
              "Business Verification": "business_applicant", "Telephone Verification": "tel_residence",
-             "Income Verification": "income", "KYC Verification": "kyc", "Seller Verification": "seller", "Other": "custom"}
+             "Income Verification": "income", "KYC Verification": "kyc", "Seller Verification": "seller",
+             "GST Verification": "gst", "Other": "custom"}
 FIELDS = ["request_type", "applicant_name", "co_applicant_name", "seller_name", "primary_phone", "alt_phone", "client_name",
           "branch_name", "bank_state", "full_address", "pincode", "verification_state", "city", "notes", "priority", "supervisor_id"]
 
@@ -119,13 +122,24 @@ async def create_request(body: ReqIn, request: Request, ctx=Depends(security.req
 @router.post("/requests/{rid}/document")
 async def upload_doc(rid: str, request: Request, file: UploadFile = File(...), ctx=Depends(security.staff)):
     r = await get_req(rid, ctx["user"])
-    data = await file.read()
+    data = await file.read(10 * 1024 * 1024 + 1)
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 10MB)")
-    ext = (file.filename or "doc.jpg").split(".")[-1][:5]
-    path = storage_service.object_path(f"requests/{rid}", ext)
-    await storage_service.put_object_async(path, data, file.content_type or "application/octet-stream")
-    d = {"id": ObjectId().__str__(), "path": path, "filename": file.filename, "mime": file.content_type, "at": core.now()}
+    ext = storage_service.detect_type(data)
+    if not ext:
+        raise HTTPException(400, "Unsupported file type. Upload an image (JPEG/PNG/WebP/HEIC) or a PDF.")
+    path = storage_service.object_path(rid, ext, "requests")
+    try:
+        stored = await storage_service.put_object_async(path, data, storage_service.mime_for(ext),
+                                                        {"request-id": rid, "variant": "request-document",
+                                                         "original-filename": file.filename})
+    except storage_service.StorageNotConfigured:
+        raise HTTPException(503, "File storage is not configured on the server")
+    except Exception:
+        raise HTTPException(502, "Upload to file storage failed. Please retry.")
+    d = {"id": ObjectId().__str__(), "path": path, "filename": file.filename, "mime": storage_service.mime_for(ext),
+         "at": core.now(), "storage_provider": stored["provider"], "storage": stored,
+         "sha256": hashlib.sha256(data).hexdigest()}
     await core.db.case_requests.update_one({"_id": r["_id"]}, {"$push": {"documents": d, "history": tl("document_uploaded", ctx["user"], {"file": file.filename})}})
     await core.audit(ctx["user"], "case_request_document", "case_request", rid, {}, request)
     return {k: v for k, v in d.items() if k != "path"}
@@ -138,9 +152,15 @@ async def get_doc(rid: str, did: str, request: Request, token: str | None = None
     d = next((x for x in r.get("documents", []) if x["id"] == did), None)
     if not d:
         raise HTTPException(404, "Document not found")
-    data, mime = await storage_service.get_object_async(d["path"])
+    if not storage_service.readable(d.get("storage_provider")):
+        raise HTTPException(404, "Document not available")
+    try:
+        data, mime = await storage_service.get_object_async(d["path"], d["storage_provider"])
+    except Exception:
+        raise HTTPException(404, "Document not available")
     await core.audit(ctx["user"], "case_request_document_viewed", "case_request", rid, {}, request)
-    return Response(data, media_type=mime)
+    from evidence_routes import safe_file_headers
+    return Response(data, media_type=mime, headers=safe_file_headers(d.get("filename"), mime))
 
 
 @router.post("/requests/{rid}/submit")
@@ -231,30 +251,15 @@ async def request_action(rid: str, body: ActionIn, request: Request, ctx=Depends
         agent = await core.db.users.find_one({"_id": oid(body.agent_id), "role": "agent", "disabled": {"$ne": True}})
         if not agent:
             raise HTTPException(400, "Agent not found or inactive")
-        client = await core.db.clients.find_one({"name": {"$regex": f"^{re.escape(r.get('client_name') or '')}$", "$options": "i"}})
-        branch = await core.db.branches.find_one({"name": {"$regex": f"^{re.escape(r.get('branch_name') or '')}$", "$options": "i"}})
         from datetime import datetime, timezone
         try:
             due = datetime.fromisoformat(body.due_at).replace(tzinfo=timezone.utc) if body.due_at else now + timedelta(hours=48)
         except ValueError:
             raise HTTPException(400, "SLA due must be a date like 2026-06-30 or 2026-06-30T18:00")
-        seq = await core.next_seq("case_seq")
-        case = {
-            "internal_case_id": f"CSV-{seq:06d}", "client_case_id": f"REQ-{str(r['_id'])[-6:].upper()}",
-            "client_id": str(client["_id"]) if client else None, "client_name": r.get("client_name") or "Unspecified",
-            "branch_id": str(branch["_id"]) if branch else None, "branch_name": r.get("branch_name"),
-            "applicant_name": r.get("applicant_name") or r.get("co_applicant_name") or r.get("seller_name"),
-            "co_applicant_name": r.get("co_applicant_name") or None, "seller_name": r.get("seller_name") or None,
-            "primary_phone": r.get("primary_phone"), "alt_phone": r.get("alt_phone"), "bank_state": r.get("bank_state"),
-            "pincode": r.get("pincode"), "verification_state": r.get("verification_state"), "notes": r.get("notes"),
-            "report_type": REQ_TYPES[r["request_type"]], "assigned_address": r.get("full_address"),
-            "city": r.get("city"), "state": r.get("verification_state") or r.get("bank_state"),
-            "priority": "High" if r.get("priority") == "Urgent" else "Medium", "due_at": due, "status": "assigned",
-            "assigned_agent_id": str(agent["_id"]), "assigned_agent_name": agent["name"], "assigned_supervisor_id": str(u["_id"]),
-            "created_by": str(u["_id"]), "source_request_id": rid, "flags": [], "created_at": now, "updated_at": now,
-            "timeline": [*r.get("history", []), tl("case_created", u, {"source": "agent request", "requested_by": r["requested_by_name"]}),
-                         tl("request_approved", u, {"approved_by": u["name"]}), tl("assigned", u, {"agent": agent["name"]})],
-        }
+        case = await case_from_request(r, rid, agent, u, supervisor_id=str(u["_id"]), source="agent_request", due=due, now=now,
+                                       extra_timeline=[tl("case_created", u, {"source": "agent request", "requested_by": r["requested_by_name"]}),
+                                                       tl("request_approved", u, {"approved_by": u["name"]}),
+                                                       tl("assigned", u, {"agent": agent["name"]})])
         res = await core.db.cases.insert_one(case)
         sets.update({"status": "assigned", "case_id": str(res.inserted_id), "internal_case_id": case["internal_case_id"], "approved_by": u["name"],
                      "approved_at": now, "allocated_at": now, "assigned_agent_id": str(agent["_id"]), "assigned_agent_name": agent["name"]})
@@ -270,6 +275,31 @@ async def request_action(rid: str, body: ActionIn, request: Request, ctx=Depends
     await core.db.case_requests.update_one({"_id": r["_id"]}, {"$set": sets, "$push": {"history": hist}})
     await core.audit(u, f"case_request_{ev}", "case_request", rid, {"comment": body.comment}, request)
     return {"ok": True, "status": sets.get("status")}
+
+
+async def case_from_request(r: dict, rid: str, agent: dict, actor: dict, supervisor_id: str | None, source: str,
+                            due, now, extra_timeline: list) -> dict:
+    """Build the case document for a case request (shared by supervisor approval and agent direct creation)."""
+    client = await core.db.clients.find_one({"name": {"$regex": f"^{re.escape(r.get('client_name') or '')}$", "$options": "i"}})
+    branch = await core.db.branches.find_one({"name": {"$regex": f"^{re.escape(r.get('branch_name') or '')}$", "$options": "i"}})
+    return {
+        # mandatory system Internal Case ID; the Client / External Case ID is optional and never invented here
+        "internal_case_id": await core.next_internal_case_id(), "client_case_id": (str(r.get("client_case_id") or "").strip() or None),
+        "client_id": str(client["_id"]) if client else None, "client_name": r.get("client_name") or "Unspecified",
+        "branch_id": str(branch["_id"]) if branch else None, "branch_name": r.get("branch_name"),
+        "applicant_name": r.get("applicant_name") or r.get("co_applicant_name") or r.get("seller_name"),
+        "co_applicant_name": r.get("co_applicant_name") or None, "seller_name": r.get("seller_name") or None,
+        "primary_phone": r.get("primary_phone"), "alt_phone": r.get("alt_phone"), "bank_state": r.get("bank_state"),
+        "pincode": r.get("pincode"), "verification_state": r.get("verification_state"), "notes": r.get("notes"),
+        "report_type": REQ_TYPES[r["request_type"]], "assigned_address": r.get("full_address"),
+        "city": r.get("city"), "state": r.get("verification_state") or r.get("bank_state"),
+        "priority": "High" if r.get("priority") == "Urgent" else "Medium", "due_at": due, "status": "assigned",
+        "assigned_agent_id": str(agent["_id"]), "assigned_agent_name": agent["name"], "assigned_supervisor_id": supervisor_id,
+        "created_by": str(actor["_id"]), "created_by_role": actor.get("role"), "source": source, "source_request_id": rid,
+        "flags": [], "created_at": now, "updated_at": now, "assigned_at": now,
+        **geocoding.initial_location_fields(None, None),
+        "timeline": [*r.get("history", []), *extra_timeline],
+    }
 
 
 @router.post("/requests/{rid}/cancel")
@@ -333,30 +363,35 @@ async def agent_response(case_id: str, body: AgentResp, request: Request, ctx=De
 
 
 # ---------------------------------------------------------------- pending alerts
+async def pending_alert_pass():
+    """One pass of the 24h/48h pending alerts (idempotent: each alert is stamped once)."""
+    now = core.now()
+    q = {"status": {"$in": core.ACTIVE_STATUSES}, **core.LIVE_CASE_FILTER}
+    async for c in core.db.cases.find({**q, "updated_at": {"$lt": now - timedelta(hours=24)}, "alert_24h_at": None}):
+        body = f"{c['internal_case_id']} · {c.get('applicant_name')} pending more than 24 hours"
+        if c.get("assigned_agent_id"):
+            await notify(c["assigned_agent_id"], "Case pending > 24h", body, str(c["_id"]), "alert")
+        await notify_case_supervisors(c, "Case pending > 24h", body)
+        await core.db.cases.update_one({"_id": c["_id"]}, {"$set": {"alert_24h_at": now}})
+    async for c in core.db.cases.find({**q, "updated_at": {"$lt": now - timedelta(hours=48)}, "alert_48h_at": None}):
+        await notify_role("super_admin", "Case pending > 48h", f"{c['internal_case_id']} · {c.get('applicant_name')} pending more than 48 hours", str(c["_id"]))
+        await core.db.cases.update_one({"_id": c["_id"]}, {"$set": {"alert_48h_at": now}})
+    rq = {"status": {"$in": ["sent_for_allocation", "under_review", "clarification"]}}
+    async for r in core.db.case_requests.find({**rq, "submitted_at": {"$lt": now - timedelta(hours=24)}, "alert_24h_at": None}):
+        body = f"{r['request_type']} request from {r['requested_by_name']} awaiting allocation more than 24 hours"
+        await notify(r["requested_by"], "Request pending > 24h", body, None, "alert")
+        if r.get("supervisor_id"):
+            await notify(r["supervisor_id"], "Request pending > 24h", body, None, "alert")
+        await core.db.case_requests.update_one({"_id": r["_id"]}, {"$set": {"alert_24h_at": now}})
+    async for r in core.db.case_requests.find({**rq, "submitted_at": {"$lt": now - timedelta(hours=48)}, "alert_48h_at": None}):
+        await notify_role("super_admin", "Request pending > 48h", f"{r['request_type']} request from {r['requested_by_name']} not allocated for 48 hours")
+        await core.db.case_requests.update_one({"_id": r["_id"]}, {"$set": {"alert_48h_at": now}})
+
+
 async def pending_alert_loop():
     while True:
         try:
-            now = core.now()
-            q = {"status": {"$in": core.ACTIVE_STATUSES}, "deleted_at": None}
-            async for c in core.db.cases.find({**q, "updated_at": {"$lt": now - timedelta(hours=24)}, "alert_24h_at": None}):
-                body = f"{c['internal_case_id']} · {c.get('applicant_name')} pending more than 24 hours"
-                if c.get("assigned_agent_id"):
-                    await notify(c["assigned_agent_id"], "Case pending > 24h", body, str(c["_id"]), "alert")
-                await notify_case_supervisors(c, "Case pending > 24h", body)
-                await core.db.cases.update_one({"_id": c["_id"]}, {"$set": {"alert_24h_at": now}})
-            async for c in core.db.cases.find({**q, "updated_at": {"$lt": now - timedelta(hours=48)}, "alert_48h_at": None}):
-                await notify_role("super_admin", "Case pending > 48h", f"{c['internal_case_id']} · {c.get('applicant_name')} pending more than 48 hours", str(c["_id"]))
-                await core.db.cases.update_one({"_id": c["_id"]}, {"$set": {"alert_48h_at": now}})
-            rq = {"status": {"$in": ["sent_for_allocation", "under_review", "clarification"]}}
-            async for r in core.db.case_requests.find({**rq, "submitted_at": {"$lt": now - timedelta(hours=24)}, "alert_24h_at": None}):
-                body = f"{r['request_type']} request from {r['requested_by_name']} awaiting allocation more than 24 hours"
-                await notify(r["requested_by"], "Request pending > 24h", body, None, "alert")
-                if r.get("supervisor_id"):
-                    await notify(r["supervisor_id"], "Request pending > 24h", body, None, "alert")
-                await core.db.case_requests.update_one({"_id": r["_id"]}, {"$set": {"alert_24h_at": now}})
-            async for r in core.db.case_requests.find({**rq, "submitted_at": {"$lt": now - timedelta(hours=48)}, "alert_48h_at": None}):
-                await notify_role("super_admin", "Request pending > 48h", f"{r['request_type']} request from {r['requested_by_name']} not allocated for 48 hours")
-                await core.db.case_requests.update_one({"_id": r["_id"]}, {"$set": {"alert_48h_at": now}})
+            await pending_alert_pass()
         except Exception as exc:
             logger.error("pending alerts failed: %s", exc)
         await asyncio.sleep(300)

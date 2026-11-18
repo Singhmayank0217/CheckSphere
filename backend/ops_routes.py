@@ -3,14 +3,17 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import secrets
 from datetime import timedelta
+from pathlib import Path
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import core
+import r2_storage
 import security
 import storage_service
 
@@ -111,7 +114,12 @@ async def close_incident(iid: str, request: Request, ctx=Depends(security.admin_
 
 
 # ---------------------------------------------------------------- backups
-BACKUP_COLLECTIONS = ["users", "clients", "branches", "cases", "reports", "evidence", "call_logs", "settings", "audit_logs", "incidents"]
+BACKUP_COLLECTIONS = ["users", "clients", "branches", "cases", "reports", "evidence", "call_logs", "settings", "audit_logs",
+                      "incidents", "case_requests", "counters", "case_uploads"]
+# Application backups are a convenience export only; the primary database backup is MongoDB Atlas backup / mongodump.
+# With R2 configured (Railway), they go to the PRIVATE bucket under checksphere/<env>/backups/, because a Railway
+# container's disk is wiped on every redeploy. Without R2 (local development) they go to a private local folder.
+BACKUP_DIR = Path(os.environ.get("BACKUP_DIR") or (core.ROOT_DIR / "backups"))
 
 
 async def run_backup(trigger: str, user=None) -> dict:
@@ -120,21 +128,34 @@ async def run_backup(trigger: str, user=None) -> dict:
         docs = await core.db[name].find({}, {"password_hash": 0}).to_list(100000)
         payload[name] = docs
     data = json.dumps(payload, default=str).encode()
-    path = f"{storage_service.STORAGE_APP}/backups/backup-{core.now().strftime('%Y%m%d-%H%M%S')}.json"
-    await storage_service.put_object_async(path, data, "application/json")
-    rec = {"path": path, "size": len(data), "trigger": trigger, "created_at": core.now(),
-           "counts": {k: len(v) for k, v in payload.items()}}
+    name = f"backup-{core.now().strftime('%Y%m%d-%H%M%S')}.json"
+    if r2_storage.configured():
+        key = f"{storage_service.STORAGE_APP}/{storage_service.MEDIA_ENV}/backups/{name}"
+        await asyncio.to_thread(r2_storage.put_object, key, data, "application/json", {"variant": "db-backup", "trigger": trigger})
+        path = f"r2:{key}"
+    else:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread((BACKUP_DIR / name).write_bytes, data)
+        path = f"local:{name}"
+    rec = {"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "trigger": trigger,
+           "created_at": core.now(), "counts": {k: len(v) for k, v in payload.items()}}
     await core.db.backups.insert_one(rec)
     await core.audit(user or {"name": "system", "role": "system"}, "backup_completed", "backup", path, {"size": len(data), "trigger": trigger})
     return rec
 
 
+async def backup_if_due() -> bool:
+    last = await core.db.backups.find_one({}, sort=[("created_at", -1)])
+    if not last or core.now() - last["created_at"] > timedelta(hours=24):
+        await run_backup("scheduled")
+        return True
+    return False
+
+
 async def daily_backup_loop():
     while True:
         try:
-            last = await core.db.backups.find_one({}, sort=[("created_at", -1)])
-            if not last or core.now() - last["created_at"] > timedelta(hours=24):
-                await run_backup("scheduled")
+            await backup_if_due()
         except Exception as exc:
             logger.error("daily backup failed: %s", exc)
         await asyncio.sleep(3600)

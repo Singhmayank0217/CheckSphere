@@ -15,6 +15,7 @@
 
 import { Platform } from "react-native";
 import { fetch as expoFetch } from "expo/fetch";
+import { File as FSFile } from "expo-file-system";
 
 export type LocalFile = {
   uri: string; // asset.uri from expo-image-picker / expo-document-picker / expo-audio
@@ -34,17 +35,31 @@ export function fileNameFor(file: LocalFile): string {
   return file.name || file.uri.split("?")[0].split("/").pop() || "file";
 }
 
+// Raised when the local file cannot be read; the upload is NOT attempted (never send an error body as the file).
+export class LocalFileError extends Error {}
+
 // Turn a local file into a part that the current runtime's fetch can serialise.
+//
+// Root cause of the Android "Unsupported file type" rejection: the previous native path read the photo with
+// expo/fetch(file://...). When that path is missing, Expo's Android file handler does not throw — it returns an
+// HTTP 404 whose body is the text "File not found". The response status was never checked, so those 14 bytes
+// were uploaded as "capture.jpg" and the server (correctly) rejected them as not being an image.
+// Now: native files are passed as expo-file-system File objects (bytes are read natively by expo/fetch's
+// multipart encoder — no Blob/base64 round trip), and missing/empty files fail loudly on the phone.
 export async function toFormDataPart(file: LocalFile): Promise<Blob> {
   if (Platform.OS === "web") {
     // blob:/data: URL from the browser picker; the browser fetch reads it fine.
-    const blob = await (await fetch(file.uri)).blob();
+    const res = await fetch(file.uri);
+    if (!res.ok) throw new LocalFileError(`Could not read the selected file (${res.status})`);
+    const blob = await res.blob();
     const type = file.mimeType || blob.type;
     return type && type !== blob.type ? new Blob([blob], { type }) : blob;
   }
-  // Native: read the local file through expo/fetch (never the RN fetch) and append the Blob.
-  const blob = await (await expoFetch(file.uri)).blob();
-  return file.mimeType && file.mimeType !== blob.type ? new Blob([blob], { type: file.mimeType }) : blob;
+  const f = new FSFile(file.uri);
+  // Generic wording: this helper serves photos AND documents (the photo queue maps it to its own photo message).
+  if (!f.exists) throw new LocalFileError("The selected file is unavailable on this device. Please select it again.");
+  if (!f.size) throw new LocalFileError("The selected file on this device is empty. Please select it again.");
+  return f as unknown as Blob;
 }
 
 export async function uploadForm(url: string, opts: UploadOptions): Promise<Response> {

@@ -6,6 +6,7 @@ import { useNetInfo } from "@react-native-community/netinfo";
 
 import { api } from "@/src/api";
 import { pendingCount, syncAllDrafts } from "@/src/utils/drafts";
+import { listPending, processPendingUploads } from "@/src/utils/pendingUploads";
 import { Banner, Btn, Card, Empty, ErrorBox, KpiCard, Loading, Screen, SectionTitle, StatusPill, showToast } from "@/src/components/ui";
 import { AgentTopBar } from "@/src/components/AgentTopBar";
 import { useSession } from "@/src/session";
@@ -37,7 +38,7 @@ function CaseRow({ c, onPress, testID }: { c: any; onPress: () => void; testID?:
 }
 
 export default function AgentHome() {
-  const { user } = useSession();
+  const { user, token } = useSession();
   const router = useRouter();
   const queryClient = useQueryClient();
   const netInfo = useNetInfo();
@@ -51,8 +52,19 @@ export default function AgentHome() {
   });
 
   const refreshPending = useCallback(async () => {
-    setPending(await pendingCount());
+    setPending((await pendingCount()) + (await listPending()).length);
   }, []);
+
+  // Saved photos upload automatically whenever the phone is online.
+  useEffect(() => {
+    if (netInfo.isConnected === false) return;
+    processPendingUploads(token).then((n) => {
+      if (n > 0) {
+        refreshPending();
+        showToast(`${n} saved photo(s) uploaded`, "success");
+      }
+    });
+  }, [netInfo.isConnected, token, refreshPending]);
 
   useEffect(() => {
     refreshPending();
@@ -73,6 +85,7 @@ export default function AgentHome() {
     setSyncing(true);
     try {
       const n = await syncAllDrafts();
+      await processPendingUploads(token);
       await refreshPending();
       queryClient.invalidateQueries({ queryKey: ["agent-cases"] });
       showToast(n > 0 ? `${n} offline draft${n > 1 ? "s" : ""} synced` : "All drafts already synced", "success");
@@ -121,7 +134,11 @@ export default function AgentHome() {
         <KpiCard label="Submitted" value={submitted.length} tone="success" testID="kpi-submitted" />
       </View>
 
-      <Btn label="Request New Verification" variant="secondary" onPress={() => router.push("/request-new")} testID="home-request-new-btn" full />
+      <View style={{ gap: spacing.sm }}>
+        <Btn label="Upload New Cases" variant="secondary" onPress={() => router.push("/upload-cases")} testID="home-upload-cases-btn" full />
+        <Btn label="Create New Verification" variant="secondary" onPress={() => router.push("/create-verification")} testID="home-create-verification-btn" full />
+        <Btn label="Allocate New Verification" variant="secondary" onPress={() => router.push("/request-new")} testID="home-request-new-btn" full />
+      </View>
       <SectionTitle>Needs attention</SectionTitle>
       {casesQ.isLoading ? (
         <Loading label="Loading assigned cases…" />

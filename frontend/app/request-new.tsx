@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { API_URL, api } from "@/src/api";
+import { API_URL, api, newIdempotencyKey } from "@/src/api";
 import { SelectField, SwitchRow, TextField } from "@/src/components/fields";
 import { BackHeader, Banner, Btn, Card, SectionTitle, StatusPill, showToast } from "@/src/components/ui";
 import { useSession } from "@/src/session";
@@ -13,7 +13,8 @@ import { uploadForm } from "@/src/utils/upload";
 import { RoleGate } from "@/src/portal/RoleGate";
 import { makeStyles, spacing } from "@/src/theme";
 
-const TYPES = ["Residence Verification", "Office Verification", "Business Verification", "Telephone Verification", "Income Verification", "KYC Verification", "Seller Verification", "Other"];
+// Request Type options — also used by Create New Verification (same dropdown, same options).
+export const TYPES = ["Residence Verification", "Office Verification", "Business Verification", "Telephone Verification", "Income Verification", "KYC Verification", "Seller Verification", "GST Verification", "Other"];
 const LABELS: Record<string, string> = { draft: "Draft", sent_for_allocation: "Sent for Allocation", under_review: "Under Review", clarification: "Clarification Requested", assigned: "Assigned", rejected: "Rejected", cancelled: "Cancelled", duplicate: "Duplicate" };
 const EMPTY: Record<string, string> = { request_type: "", applicant_name: "", co_applicant_name: "", seller_name: "", primary_phone: "", alt_phone: "", client_name: "", branch_name: "", bank_state: "", full_address: "", pincode: "", verification_state: "", city: "", notes: "", priority: "Normal", supervisor_id: "" };
 
@@ -35,7 +36,8 @@ function RequestNewScreen() {
 
   const pick = async () => {
     const r = await DocumentPicker.getDocumentAsync({ type: ["image/*", "application/pdf"], copyToCacheDirectory: true });
-    if (!r.canceled && r.assets?.[0]) setDoc(r.assets[0]);
+    // key per picked file: a retried upload of the same document is stored once
+    if (!r.canceled && r.assets?.[0]) setDoc({ ...r.assets[0], idemKey: newIdempotencyKey() });
   };
   const submit = async () => {
     const e: string[] = [];
@@ -60,7 +62,7 @@ function RequestNewScreen() {
       }
       if (!doc.uploaded) {
         const up = await uploadForm(`${API_URL}/api/requests/${id}/document`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(doc.idemKey ? { "Idempotency-Key": doc.idemKey } : {}) },
           files: { file: { uri: doc.uri, name: doc.name ?? "document", mimeType: doc.mimeType ?? "application/octet-stream" } },
         });
         if (!up.ok) throw new Error("Document upload failed — please try again");
@@ -80,7 +82,7 @@ function RequestNewScreen() {
   return (
     <View style={styles.root} testID="request-new-screen">
       <KeyboardAwareScrollView bottomOffset={24} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingTop: insets.top + spacing.sm, paddingBottom: insets.bottom + 48 }}>
-        <BackHeader title="Request New Verification" testID="request-back-btn" />
+        <BackHeader title="Allocate New Verification" testID="request-back-btn" />
         <Banner tone="info" message="Your request goes to a Supervisor for review and allocation. It becomes an active case only after approval." />
         {errs.length ? <View style={styles.err} testID="request-errors"><Text style={styles.errText}>Please fix {errs.length} issue{errs.length > 1 ? "s" : ""} listed above the Submit button.</Text></View> : null}
         <Card>

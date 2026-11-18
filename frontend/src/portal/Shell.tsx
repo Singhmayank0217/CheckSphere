@@ -25,6 +25,7 @@ export const ADMIN_NAV: NavItem[] = [
   { path: "/admin/map", label: "Map and Evidence Flags", icon: "map-outline" },
   { path: "/admin/review", label: "Review Queue", icon: "checkmark-done-outline" },
   { path: "/admin/requests", label: "Case Requests", icon: "mail-unread-outline" },
+  { path: "/admin/uploads", label: "Uploaded Cases", icon: "cloud-upload-outline" },
   { path: "/admin/mis", label: "MIS and Exports", icon: "download-outline" },
   { path: "/admin/audit", label: "Audit Log", icon: "list-outline" },
   { path: "/admin/security", label: "Security and Sessions", icon: "lock-closed-outline" },
@@ -35,8 +36,10 @@ export const ADMIN_NAV: NavItem[] = [
 export const SUPERVISOR_NAV: NavItem[] = [
   { path: "/supervisor", label: "Dashboard", icon: "grid-outline" },
   { path: "/supervisor/cases", label: "Cases", icon: "folder-open-outline" },
+  { path: "/supervisor/create", label: "Create New Case", icon: "add-circle-outline" },
   { path: "/supervisor/review", label: "Review Queue", icon: "checkmark-done-outline" },
   { path: "/supervisor/requests", label: "Case Requests", icon: "mail-unread-outline" },
+  { path: "/supervisor/uploads", label: "Uploaded Cases", icon: "cloud-upload-outline" },
   { path: "/supervisor/map", label: "Map and Evidence Flags", icon: "map-outline" },
   { path: "/supervisor/agents", label: "My Team", icon: "walk-outline" },
   { path: "/supervisor/mis", label: "MIS and Exports", icon: "download-outline" },

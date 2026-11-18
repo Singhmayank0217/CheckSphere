@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
+import { onServerState, type ServerState } from "@/src/api";
 import { makeStyles, spacing, radius, typography, useTheme } from "@/src/theme";
 
 // ---------------------------------------------------------------- Toast
@@ -37,6 +38,22 @@ export function ToastHost() {
   return (
     <View pointerEvents="none" style={[styles.toast, toneStyle, { bottom: insets.bottom + 24 }]} testID="toast">
       <Text style={styles.toastText}>{toast.message}</Text>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- Server wake-up banner
+// Shown while requests are being retried because the server is starting (Railway Serverless cold start).
+export function ServerWakeBanner() {
+  const [state, setState] = useState<ServerState>("ok");
+  const insets = useSafeAreaInsets();
+  const styles = useStyles();
+  useEffect(() => onServerState(setState), []);
+  if (state !== "waking") return null;
+  return (
+    <View pointerEvents="none" style={[styles.wake, { top: insets.top + 8 }]} testID="server-waking-banner">
+      <ActivityIndicator size="small" color="#fff" />
+      <Text style={styles.wakeText}>Server is starting up — please wait, this can take up to a minute…</Text>
     </View>
   );
 }
@@ -112,6 +129,10 @@ export const FLAG_LABELS: Record<string, string> = {
   same_evidence_reused: "Same evidence photo reused", impossible_travel: "Impossible travel",
   late_submission: "Late submission vs SLA", incomplete_evidence: "Incomplete evidence",
   multiple_same_place_time: "Multiple reports, same place/time", no_visit_started: "Visit not started at location",
+  photo_far_from_assigned: "Photo outside allowed distance (reason given)", photo_without_gps: "Photo without GPS (reason given)",
+  possible_mock_location: "Possible mock location", device_clock_suspect: "Device clock differs from server",
+  no_reference_location: "No case reference location",
+  location_uncertain: "Distance uncertain (GPS accuracy / approximate case location)", stale_gps_fix: "GPS position older than photo",
 };
 
 export function StatusPill({ status, testID }: { status: string; testID?: string }) {
@@ -350,6 +371,12 @@ const useStyles = makeStyles((colors) => ({
   toastInfo: { backgroundColor: colors.surfaceInverse }, toastSuccess: { backgroundColor: colors.success },
   toastError: { backgroundColor: colors.error },
   toastText: { color: colors.onSurfaceInverse, textAlign: "center", fontSize: typography.scale.base },
+  wake: {
+    position: "absolute", alignSelf: "center", maxWidth: 460, marginHorizontal: spacing.lg, flexDirection: "row",
+    alignItems: "center", gap: spacing.sm, borderRadius: radius.md, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg,
+    backgroundColor: colors.surfaceInverse, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 8, elevation: 8, zIndex: 1000,
+  },
+  wakeText: { color: colors.onSurfaceInverse, fontSize: typography.scale.sm, fontWeight: "600", flexShrink: 1 },
 
   modalOverlay: {
     flex: 1, backgroundColor: "rgba(26,26,24,0.5)", alignItems: "center", justifyContent: "center", padding: spacing.lg,

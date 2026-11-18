@@ -92,7 +92,7 @@ export default function AgentCases() {
             <Pressable style={styles.card} onPress={() => router.push(`/case/${item.id}`)} testID={`case-card-${item.internal_case_id}`}>
               <View style={{ flex: 1, gap: 3 }}>
                 <Text style={styles.applicant}>{item.applicant_name}</Text>
-                <Text style={styles.meta}>{item.internal_case_id} · Client Case: {item.client_case_id}</Text>
+                <Text style={styles.meta}>{item.internal_case_id}{item.client_case_id ? ` · Client Case: ${item.client_case_id}` : ""}</Text>
                 <Text style={styles.meta}>{item.client_name} · {item.report_type_name || item.report_type}</Text>
                 <Text style={styles.address} numberOfLines={2}>{item.assigned_address}</Text>
               </View>

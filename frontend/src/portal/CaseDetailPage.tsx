@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
+import { Linking, Modal, Pressable, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -12,11 +12,12 @@ import { usePortalBase } from "@/src/portal/base";
 import { DataTable } from "@/src/portal/DataTable";
 import { Page, Panel } from "@/src/portal/Page";
 import { useSession } from "@/src/session";
+import { fmtIST, mapsUrl, parseLatLon } from "@/src/utils/geo";
 import { makeStyles, radius, spacing } from "@/src/theme";
 
 const TABS = ["Overview", "Report", "GPS and Map", "Photos and Documents", "Call Log", "Review and Comments", "Timeline and Audit Log", "Export History"];
 type Action = "approve" | "return" | "inconclusive" | "exception" | "escalate";
-const fmt = (d?: string) => (d ? new Date(d).toLocaleString() : "—");
+const fmt = (d?: string) => (d ? fmtIST(d) : "—");
 const detail = (d: any) => Object.entries(d ?? {}).filter(([, v]) => v !== "" && v != null && !(Array.isArray(v) && !v.length)).map(([k, v]) => `${k.replace(/_/g, " ")}: ${Array.isArray(v) ? v.join(", ") : String(v)}`).join(" · ");
 
 export default function CaseDetailPage() {
@@ -27,6 +28,7 @@ export default function CaseDetailPage() {
   const qc = useQueryClient();
   const styles = useStyles();
   const [tab, setTab] = useState(TABS[0]);
+  const [exporting, setExporting] = useState<{ fmt: "docx" | "pdf"; text: string } | null>(null);
   const [reveal, setReveal] = useState(false);
   const [action, setAction] = useState<Action | null>(null);
   const [comment, setComment] = useState("");
@@ -35,6 +37,12 @@ export default function CaseDetailPage() {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [loc, setLoc] = useState({ address: "", paste: "", lat: "", lon: "", reason: "" });
+  const [locBusy, setLocBusy] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
+  const [delReason, setDelReason] = useState("");
+  const [delBusy, setDelBusy] = useState(false);
+  const isSuperAdmin = user?.role === "super_admin";
 
   const caseQ = useQuery({ queryKey: ["case", id], queryFn: () => api<any>(`/cases/${id}`), enabled: !!id });
   const rid = caseQ.data?.latest_report?.id;
@@ -46,6 +54,20 @@ export default function CaseDetailPage() {
   const tlQ = useQuery({ queryKey: ["timeline", id], queryFn: () => api<any>(`/cases/${id}/timeline`), enabled: !!id });
 
   const refresh = () => ["case", "review", "admin-cases", "admin-stats", "case-audit", "timeline"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+  const refreshLoc = () => ["case", "timeline", "case-audit"].forEach((k) => qc.invalidateQueries({ queryKey: [k, id] }));
+  const saveLoc = async (body: any, done: string) => {
+    setLocBusy(true);
+    try {
+      await api(`/cases/${id}/location`, { method: "POST", body });
+      setLoc({ address: "", paste: "", lat: "", lon: "", reason: "" });
+      refreshLoc();
+      showToast(done, "success");
+    } catch (e: any) {
+      showToast(e?.message ?? "Could not save the location", "error");
+    } finally {
+      setLocBusy(false);
+    }
+  };
 
   if (caseQ.isLoading) return <Page><Loading label="Loading case…" /></Page>;
   if (caseQ.isError || !caseQ.data) return <Page><ErrorBox message="Case not found or not in your scope." onRetry={() => caseQ.refetch()} /></Page>;
@@ -74,10 +96,30 @@ export default function CaseDetailPage() {
     } catch (e: any) { showToast(e?.message ?? "Assign failed", "error"); } finally { setBusy(false); }
   };
   const doExport = async (fmtx: "docx" | "pdf") => {
-    try { await downloadFile(`/exports/case/${id}/${fmtx}`, `${c.internal_case_id}.${fmtx}`); refresh(); showToast("Export downloaded", "success"); }
+    if (exporting) return; // one download at a time from this page (other users/pages are independent)
+    setExporting({ fmt: fmtx, text: "Preparing report…" });
+    try {
+      await downloadFile(`/exports/case/${id}/${fmtx}`, `${c.internal_case_id}.${fmtx}`, (p) => {
+        setExporting({ fmt: fmtx, text: p.phase === "preparing" ? "Preparing report…"
+          : p.total ? `Downloading ${Math.round((p.loaded / p.total) * 100)}%` : `Downloading ${(p.loaded / 1048576).toFixed(1)} MB` });
+      });
+      refresh(); showToast("Export downloaded", "success");
+    }
     catch (e: any) { showToast(e?.message ?? "Export failed", "error"); }
+    finally { setExporting(null); }
   };
   const open = (a: Action) => { setAction(a); setComment(""); };
+  const doDelete = async () => {
+    if (!isSuperAdmin || delReason.trim().length < 3) return;
+    setDelBusy(true);
+    try {
+      await api(`/cases/${id}/delete`, { method: "POST", body: { reason: delReason.trim() } });
+      showToast(`${c.internal_case_id} deleted (kept in the audit trail; recoverable)`, "success");
+      setDelOpen(false); setDelReason("");
+      ["admin-cases", "admin-stats", "deleted-cases"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      router.replace(`${base}/cases` as any);
+    } catch (e: any) { showToast(e?.message ?? "Delete failed", "error"); } finally { setDelBusy(false); }
+  };
   const evidence = r?.evidence ?? evQ.data?.items ?? [];
 
   return (
@@ -100,8 +142,11 @@ export default function CaseDetailPage() {
         <Btn label="Mark Inconclusive" variant="secondary" small disabled={!reviewable} onPress={() => open("inconclusive")} testID="action-inconclusive" />
         <Btn label="Mark Exception" variant="danger" small disabled={!reviewable} onPress={() => open("exception")} testID="action-exception" />
         <Btn label="Escalate" variant="secondary" small disabled={!reviewable || user?.role === "super_admin"} onPress={() => open("escalate")} testID="action-escalate" />
-        <Btn label="Export Word" variant="secondary" small disabled={!exportable} onPress={() => doExport("docx")} testID="action-export-docx" />
-        <Btn label="Export PDF" variant="secondary" small disabled={!exportable} onPress={() => doExport("pdf")} testID="action-export-pdf" />
+        <Btn label={exporting?.fmt === "docx" ? exporting.text : "Export Word"} variant="secondary" small disabled={!exportable || !!exporting}
+          onPress={() => doExport("docx")} testID="action-export-docx" />
+        <Btn label={exporting?.fmt === "pdf" ? exporting.text : "Export PDF"} variant="secondary" small disabled={!exportable || !!exporting}
+          onPress={() => doExport("pdf")} testID="action-export-pdf" />
+        {isSuperAdmin ? <Btn label="Delete Case" variant="danger" small onPress={() => { setDelReason(""); setDelOpen(true); }} testID="action-delete-case" /> : null}
       </View>
       {(c.flags ?? []).length > 0 ? <Banner tone="error" message={`Evidence flags for supervisor review (never auto-reject): ${c.flags.map((x: string) => FLAG_LABELS[x] ?? x).join(", ")}`} /> : null}
       {c.escalated ? <Banner tone="warning" message="This case has been escalated to the Super Admin." /> : null}
@@ -118,7 +163,7 @@ export default function CaseDetailPage() {
         <View style={styles.grid}>
           <Panel title="Case details" style={styles.col}>
             <DisplayRow label="Internal Case ID" value={c.internal_case_id} />
-            <DisplayRow label="Client Case ID" value={c.client_case_id} />
+            <DisplayRow label="Client / External Case ID" value={c.client_case_id || "Not provided"} />
             <DisplayRow label="Applicant" value={c.applicant_name} />
             <DisplayRow label="Co-applicant" value={c.co_applicant_name} />
             <DisplayRow label="Loan / Product" value={c.loan_type} />
@@ -159,11 +204,76 @@ export default function CaseDetailPage() {
           <Panel title="Report GPS" style={styles.col}>
             {gps ? <MiniMap lat={gps.lat} lon={gps.lon} accuracy={gps.accuracy} height={300} testID="detail-map" /> : <Empty title="No GPS captured" />}
           </Panel>
-          <Panel title="Visit" style={styles.col}>
+          <Panel title="Case reference location (assigned address)" style={styles.col}>
+            <DisplayRow label="Assigned address" value={[c.assigned_address, c.city, c.state, c.pincode].filter(Boolean).join(", ") || "—"} />
+            {c.location_problem ? <Banner tone="error" message={`Reference location missing — distance is NOT being checked. ${c.location_problem}`} /> : null}
+            <DisplayRow label="Reference coordinates" value={c.assigned_lat != null ? `${c.assigned_lat}, ${c.assigned_lon}` : "Not set"} />
+            <DisplayRow label="Precision · source" value={c.assigned_lat != null ? `${c.location_precision ?? "exact"} · ${c.location_source ?? "—"} · ${c.location_status ?? "—"}` : (c.location_status ?? "never located")} />
+            {c.location_note ? <Text style={styles.sub}>{c.location_note}</Text> : null}
+            {c.assigned_lat != null ? (
+              <Btn label="Open reference point in Google Maps" small variant="secondary" testID="loc-open-ref" onPress={() => Linking.openURL(mapsUrl(c.assigned_lat, c.assigned_lon))} />
+            ) : null}
+            {!["pinned", "confirmed"].includes(c.location_status) && c.assigned_address ? (
+              <Btn label={locBusy ? "Looking up…" : "Look up assigned address now"} small variant="secondary" loading={locBusy} testID="loc-lookup" onPress={async () => {
+                setLocBusy(true);
+                try {
+                  const out = await api<any>(`/cases/${id}/location/lookup`, { method: "POST" });
+                  refreshLoc();
+                  showToast(out.assigned_lat != null ? `Located (${out.location_precision} level)` : "Not located automatically — confirm a candidate or pin it", out.assigned_lat != null ? "success" : "error");
+                } catch (e: any) { showToast(e?.message ?? "Lookup failed", "error"); } finally { setLocBusy(false); }
+              }} />
+            ) : null}
+            {(c.location_candidates ?? []).length && c.assigned_lat == null ? (
+              <View style={{ gap: spacing.sm, marginTop: spacing.sm }} testID="loc-candidates">
+                <Text style={styles.sub}>Unverified candidates (check each in Google Maps before confirming; a confirmed candidate keeps its own precision):</Text>
+                {c.location_candidates.map((cd: any, i: number) => (
+                  <View key={i} style={styles.candidate}>
+                    <Text style={styles.sub}>{cd.precision} level · {cd.label}</Text>
+                    <Text style={styles.sub}>{cd.note}</Text>
+                    <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
+                      <Btn label="Open in Google Maps" small variant="secondary" onPress={() => Linking.openURL(mapsUrl(cd.lat, cd.lon))} />
+                      <Btn label="Confirm this location" small disabled={loc.reason.trim().length < 3 || locBusy} testID={`loc-confirm-${i}`}
+                        onPress={() => saveLoc({ candidate: i, reason: loc.reason.trim() }, "Candidate confirmed")} />
+                    </View>
+                  </View>
+                ))}
+                {loc.reason.trim().length < 3 ? <Text style={styles.sub}>Enter a reason below to confirm a candidate.</Text> : null}
+              </View>
+            ) : null}
+          </Panel>
+          <Panel title="Visit and photo GPS" style={styles.col}>
             <DisplayRow label="Visit started" value={fmt(c.visit?.started_at)} />
             <DisplayRow label="Start location" value={c.visit ? `${c.visit.lat}, ${c.visit.lon} (±${c.visit.accuracy ?? "-"}m)` : "—"} />
             <DisplayRow label="Report GPS" value={gps ? `${gps.lat}, ${gps.lon} (±${gps.accuracy}m)` : "—"} />
-            <DisplayRow label="Assigned coordinates" value={c.assigned_lat ? `${c.assigned_lat}, ${c.assigned_lon}` : "Not geocoded"} />
+            {evidence.filter((e: any) => e.kind === "photo" && e.location_check).slice(0, 6).map((e: any) => {
+              const lc = e.location_check;
+              return (
+                <DisplayRow key={e.id} label={`${e.slot ?? "photo"} · ${fmt(e.captured_at ?? e.created_at)}`}
+                  value={`Captured at ${e.gps?.lat}, ${e.gps?.lon} (±${Math.round(e.gps?.accuracy ?? 0)} m) near ${e.photo_address?.text ?? "address unavailable"} · ${lc.distance_m != null ? `${Math.round(lc.distance_m)} m from reference` : "distance not checked"} · ${lc.status}${lc.status !== "within" ? ` — ${lc.explanation}` : ""}`} />
+              );
+            })}
+          </Panel>
+          <Panel title="Correct assigned address or pin the exact location (audited)" style={styles.col}>
+            <TextField label="New address (leave blank to keep)" value={loc.address} onChange={(v) => setLoc({ ...loc, address: v })} multiline testID="loc-address" />
+            <TextField label="Paste a Google Maps link or 'latitude, longitude' to pin" value={loc.paste} testID="loc-paste"
+              onChange={(v) => { const p = parseLatLon(v); setLoc({ ...loc, paste: v, ...(p ? { lat: String(p.lat), lon: String(p.lon) } : {}) }); }} />
+            <TextField label="Latitude (pin)" value={loc.lat} onChange={(v) => setLoc({ ...loc, lat: v })} keyboardType="numeric" testID="loc-lat" />
+            <TextField label="Longitude (pin)" value={loc.lon} onChange={(v) => setLoc({ ...loc, lon: v })} keyboardType="numeric" testID="loc-lon" />
+            {parseLatLon(`${loc.lat},${loc.lon}`) ? (
+              <Btn label="Check this pin in Google Maps before saving" small variant="secondary" onPress={() => Linking.openURL(mapsUrl(Number(loc.lat), Number(loc.lon)))} />
+            ) : null}
+            <TextField label="Reason (required)" value={loc.reason} onChange={(v) => setLoc({ ...loc, reason: v })} testID="loc-reason" />
+            <Text style={styles.sub}>A pin is saved as an exact reference point. A new address without a pin is looked up again automatically; if it cannot be verified you will be asked to confirm or pin it. Every change is recorded in the timeline and audit log with the old and new values.</Text>
+            <Btn label="Save" small loading={locBusy} disabled={loc.reason.trim().length < 3} testID="loc-save" onPress={() => {
+              const body: any = { reason: loc.reason.trim() };
+              if (loc.address.trim()) body.assigned_address = loc.address.trim();
+              if (loc.lat.trim() || loc.lon.trim()) {
+                const p = parseLatLon(`${loc.lat.trim()},${loc.lon.trim()}`);
+                if (!p) { showToast("Enter valid latitude and longitude (decimal degrees)", "error"); return; }
+                body.assigned_lat = p.lat; body.assigned_lon = p.lon;
+              }
+              saveLoc(body, "Address / location saved");
+            }} />
           </Panel>
         </View>
       ) : null}
@@ -176,7 +286,11 @@ export default function CaseDetailPage() {
                 <Image source={{ uri: fileUrl(e.id, token) }} style={styles.evImg} contentFit="cover" />
                 <Text style={styles.evTitle}>{e.slot}</Text>
                 <Text style={styles.sub}>{fmt(e.captured_at)}</Text>
-                <Text style={styles.sub}>GPS {e.gps?.lat ?? "—"}, {e.gps?.lon ?? "—"} ±{e.gps?.accuracy ?? "-"}m</Text>
+                <Text style={styles.sub}>GPS {e.gps?.lat ?? "—"}, {e.gps?.lon ?? "—"} ±{e.gps?.accuracy ?? "-"}m · {e.gps?.status ?? "—"}{e.gps?.mocked ? " · MOCK LOCATION" : ""}</Text>
+                {e.distance_m != null ? <Text style={styles.sub}>{Math.round(e.distance_m)} m from case location (allowed {Math.round(e.allowed_distance_m ?? 0)} m)</Text> : null}
+                {e.location_reason ? <Text style={styles.sub}>Agent reason: {e.location_reason}</Text> : null}
+                {e.received_at ? <Text style={styles.sub}>Received {fmt(e.received_at)}{e.clock_skew_s != null && Math.abs(e.clock_skew_s) > 300 ? ` · clock diff ${Math.round(e.clock_skew_s / 60)} min` : ""}</Text> : null}
+                {(e.flags ?? []).length ? <Text style={[styles.sub, { color: "#9C6B14" }]}>{e.flags.map((f: string) => FLAG_LABELS[f] ?? f).join(", ")}</Text> : null}
                 <Text style={styles.sub}>By {e.uploaded_by_name ?? "—"} · #{(e.sha256 ?? "").slice(0, 10)}</Text>
               </Pressable>
             ))}
@@ -253,6 +367,18 @@ export default function CaseDetailPage() {
         <Btn label="Confirm" onPress={doAssign} loading={busy} disabled={!agentId} testID="assign-confirm-btn" full />
       </PopupModal>
 
+      {isSuperAdmin ? (
+        <PopupModal visible={delOpen} title="Delete this case?" onClose={() => setDelOpen(false)}>
+          <Banner tone="warning" message="The case is removed from case lists, dashboards, search, exports and reports. It is not destroyed: the record, reports, photos and audit history are kept and the Super Admin can restore it." />
+          <DisplayRow label="Internal Case ID" value={c.internal_case_id} />
+          <DisplayRow label="Applicant" value={c.applicant_name || "(blank)"} />
+          <DisplayRow label="Client / External Case ID" value={c.client_case_id || "Not provided"} />
+          <DisplayRow label="Status" value={c.status} />
+          <TextField label="Reason for deletion (required, recorded in the audit log)" value={delReason} onChange={setDelReason} multiline testID="delete-reason-input" />
+          <Btn label={`Delete ${c.internal_case_id}`} variant="danger" onPress={doDelete} loading={delBusy} disabled={delReason.trim().length < 3} testID="delete-confirm-btn" full />
+        </PopupModal>
+      ) : null}
+
       <Modal visible={!!photo} transparent animationType="fade" onRequestClose={() => setPhoto(null)}>
         <Pressable style={styles.overlay} onPress={() => setPhoto(null)} testID="photo-modal">
           {photo ? <Image source={{ uri: fileUrl(photo, token) }} style={{ width: "90%", height: "90%" }} contentFit="contain" /> : null}
@@ -267,6 +393,7 @@ const useStyles = makeStyles((colors) => ({
   titleRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, flexWrap: "wrap", marginBottom: spacing.md },
   title: { fontSize: 24, fontWeight: "800", color: colors.onSurface },
   sub: { color: colors.muted, fontSize: 13, marginTop: 2 },
+  candidate: { padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, gap: 4 },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.lg, padding: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
   tabs: { flexDirection: "row", flexWrap: "wrap", borderBottomWidth: 1, borderBottomColor: colors.border, marginBottom: spacing.lg },
   tab: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderBottomWidth: 3, borderBottomColor: "transparent" },

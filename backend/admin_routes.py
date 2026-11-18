@@ -115,57 +115,157 @@ async def user_sessions(user_id: str, ctx=Depends(security.admin_only)):
     return {"items": items}
 
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- clients and branches
+# Reading is open to all staff (case forms need the lists). Creating, editing, activating and deactivating is
+# Super Admin only, enforced here on the server (security.admin_only), not just by hiding buttons.
+# There is deliberately no delete: deactivation keeps the history of existing cases intact.
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    code: str | None = None
+    code: str | None = Field(default=None, max_length=50)
+
+
+class ClientUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=50)
+
+
+class BranchCreate(BaseModel):
+    client_id: str
+    name: str = Field(min_length=1, max_length=200)
+    city: str | None = Field(default=None, max_length=100)
+    state: str | None = Field(default=None, max_length=100)
+
+
+class BranchUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    city: str | None = Field(default=None, max_length=100)
+    state: str | None = Field(default=None, max_length=100)
+
+
+def _oid(v: str, what: str) -> ObjectId:
+    try:
+        return ObjectId(v)
+    except Exception:
+        raise HTTPException(404, f"{what} not found")
+
+
+def _same_name(name: str) -> dict:
+    return {"$regex": f"^{re.escape(name.strip())}$", "$options": "i"}
 
 
 @router.get("/clients")
-async def list_clients(ctx=Depends(security.staff)):
-    items = [core.clean(c) async for c in core.db.clients.find({"active": {"$ne": False}}).sort("name", 1)]
+async def list_clients(include_inactive: bool = False, ctx=Depends(security.staff)):
+    """Active clients for everyone; the Super Admin can also ask for inactive ones (management screen)."""
+    query = {} if include_inactive and ctx["user"]["role"] == "super_admin" else {"active": {"$ne": False}}
+    items = [core.clean(c) async for c in core.db.clients.find(query).sort("name", 1)]
     return {"items": items}
 
 
 @router.post("/clients")
 async def create_client(body: ClientCreate, request: Request, ctx=Depends(security.admin_only)):
-    if await core.db.clients.find_one({"name": body.name}):
+    if await core.db.clients.find_one({"name": _same_name(body.name)}):
         raise HTTPException(400, "Client already exists")
     res = await core.db.clients.insert_one(ClientDocFrom(body))
-    await core.audit(ctx["user"], "client_created", "client", str(res.inserted_id), {"name": body.name}, request)
+    await core.audit(ctx["user"], "client_created", "client", str(res.inserted_id), {"name": body.name.strip()}, request)
     return core.clean(await core.db.clients.find_one({"_id": res.inserted_id}))
 
 
 def ClientDocFrom(body: ClientCreate) -> dict:
-    return {"name": body.name, "code": body.code, "active": True, "created_at": core.now()}
+    return {"name": body.name.strip(), "code": (body.code or "").strip() or None, "active": True, "created_at": core.now()}
 
 
-class BranchCreate(BaseModel):
-    client_id: str
-    name: str
-    city: str | None = None
-    state: str | None = None
+@router.put("/clients/{client_id}")
+async def update_client(client_id: str, body: ClientUpdate, request: Request, ctx=Depends(security.admin_only)):
+    oid = _oid(client_id, "Client")
+    client = await core.db.clients.find_one({"_id": oid})
+    if not client:
+        raise HTTPException(404, "Client not found")
+    updates = {}
+    if body.name is not None and body.name.strip() != client.get("name"):
+        if await core.db.clients.find_one({"name": _same_name(body.name), "_id": {"$ne": oid}}):
+            raise HTTPException(400, "Another client already has this name")
+        updates["name"] = body.name.strip()
+    if body.code is not None:
+        updates["code"] = body.code.strip() or None
+    if updates:
+        updates["updated_at"] = core.now()
+        await core.db.clients.update_one({"_id": oid}, {"$set": updates})
+        await core.audit(ctx["user"], "client_updated", "client", client_id,
+                         {k: {"from": client.get(k), "to": v} for k, v in updates.items() if k != "updated_at"}, request)
+    return core.clean(await core.db.clients.find_one({"_id": oid}))
+
+
+@router.post("/clients/{client_id}/set-active")
+async def set_client_active(client_id: str, body: SetActive, request: Request, ctx=Depends(security.admin_only)):
+    oid = _oid(client_id, "Client")
+    res = await core.db.clients.update_one({"_id": oid}, {"$set": {"active": body.active, "updated_at": core.now()}})
+    if not res.matched_count:
+        raise HTTPException(404, "Client not found")
+    await core.audit(ctx["user"], "client_activated" if body.active else "client_deactivated", "client", client_id, {}, request)
+    return core.clean(await core.db.clients.find_one({"_id": oid}))
 
 
 @router.get("/branches")
-async def list_branches(client_id: str | None = None, ctx=Depends(security.staff)):
-    query = {"active": {"$ne": False}}
+async def list_branches(client_id: str | None = None, include_inactive: bool = False, ctx=Depends(security.staff)):
+    """Active branches of active clients for everyone; the Super Admin can also ask for inactive ones."""
+    query: dict = {}
+    if not (include_inactive and ctx["user"]["role"] == "super_admin"):
+        inactive_clients = [str(c["_id"]) async for c in core.db.clients.find({"active": False}, {"_id": 1})]
+        query = {"active": {"$ne": False}, "client_id": {"$nin": inactive_clients}}
     if client_id:
-        query["client_id"] = client_id
+        query["client_id"] = {**query.get("client_id", {}), "$eq": client_id}
     items = [core.clean(b) async for b in core.db.branches.find(query).sort("name", 1)]
     return {"items": items}
 
 
 @router.post("/branches")
 async def create_branch(body: BranchCreate, request: Request, ctx=Depends(security.admin_only)):
-    client = await core.db.clients.find_one({"_id": ObjectId(body.client_id)})
+    client = await core.db.clients.find_one({"_id": _oid(body.client_id, "Client")})
     if not client:
         raise HTTPException(400, "Client not found")
+    if client.get("active") is False:
+        raise HTTPException(400, "This client is deactivated. Activate it before adding branches.")
+    if await core.db.branches.find_one({"client_id": body.client_id, "name": _same_name(body.name)}):
+        raise HTTPException(400, "This client already has a branch with this name")
     res = await core.db.branches.insert_one({
-        "client_id": body.client_id, "name": body.name, "city": body.city, "state": body.state,
-        "active": True, "created_at": core.now()})
-    await core.audit(ctx["user"], "branch_created", "branch", str(res.inserted_id), {"name": body.name}, request)
+        "client_id": body.client_id, "name": body.name.strip(), "city": (body.city or "").strip() or None,
+        "state": (body.state or "").strip() or None, "active": True, "created_at": core.now()})
+    await core.audit(ctx["user"], "branch_created", "branch", str(res.inserted_id),
+                     {"name": body.name.strip(), "client_id": body.client_id}, request)
     return core.clean(await core.db.branches.find_one({"_id": res.inserted_id}))
+
+
+@router.put("/branches/{branch_id}")
+async def update_branch(branch_id: str, body: BranchUpdate, request: Request, ctx=Depends(security.admin_only)):
+    oid = _oid(branch_id, "Branch")
+    branch = await core.db.branches.find_one({"_id": oid})
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+    updates = {}
+    if body.name is not None and body.name.strip() != branch.get("name"):
+        if await core.db.branches.find_one({"client_id": branch["client_id"], "name": _same_name(body.name), "_id": {"$ne": oid}}):
+            raise HTTPException(400, "This client already has a branch with this name")
+        updates["name"] = body.name.strip()
+    for k in ("city", "state"):
+        v = getattr(body, k)
+        if v is not None:
+            updates[k] = v.strip() or None
+    if updates:
+        updates["updated_at"] = core.now()
+        await core.db.branches.update_one({"_id": oid}, {"$set": updates})
+        await core.audit(ctx["user"], "branch_updated", "branch", branch_id,
+                         {k: {"from": branch.get(k), "to": v} for k, v in updates.items() if k != "updated_at"}, request)
+    return core.clean(await core.db.branches.find_one({"_id": oid}))
+
+
+@router.post("/branches/{branch_id}/set-active")
+async def set_branch_active(branch_id: str, body: SetActive, request: Request, ctx=Depends(security.admin_only)):
+    oid = _oid(branch_id, "Branch")
+    res = await core.db.branches.update_one({"_id": oid}, {"$set": {"active": body.active, "updated_at": core.now()}})
+    if not res.matched_count:
+        raise HTTPException(404, "Branch not found")
+    await core.audit(ctx["user"], "branch_activated" if body.active else "branch_deactivated", "branch", branch_id, {}, request)
+    return core.clean(await core.db.branches.find_one({"_id": oid}))
 
 
 @router.get("/regions")
@@ -197,4 +297,4 @@ async def report_types(ctx=Depends(security.staff)):
     return {"items": report_type_choices(), "configs": {k: config_for(k, settings) for k in
                                                         ["residence_applicant", "residence_coapplicant", "business_applicant",
                                                          "office_coapplicant", "seller", "tel_residence", "tel_office",
-                                                         "income", "kyc", "bank_account", "custom"]}}
+                                                         "income", "kyc", "gst", "bank_account", "custom"]}}
