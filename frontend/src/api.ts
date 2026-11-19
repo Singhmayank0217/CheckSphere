@@ -42,12 +42,20 @@ export class ApiError extends Error {
   }
 }
 
-// ---------------------------------------------------------------- cold start (Railway Serverless) handling
-// A sleeping server takes a few seconds to wake; meanwhile the platform answers 502/503 or the connection fails.
-// Requests are retried with backoff for up to ~60 s while a "Server is starting up" banner is shown.
+// A request that fails because of the network (no connection, timeout, server not reachable). status 0 = no HTTP answer.
+export class NetworkError extends ApiError {
+  constructor(message: string) {
+    super(0, message);
+  }
+}
+
+// ---------------------------------------------------------------- connection problems: timeouts and retries
+// A request attempt that gets no response headers within REQUEST_TIMEOUT_MS is aborted. A network failure, a timeout
+// or a 502/503/504 is retried with backoff for up to RETRY_BUDGET_MS while a "retrying" banner is shown; the banner
+// says whether the phone itself is offline or the server is not answering (it never claims the server is asleep).
 // GETs are always safe to repeat. Every other method carries an Idempotency-Key that stays the same across these
 // retries, so the server replays the first result instead of creating a second case/request/submission.
-export type ServerState = "ok" | "waking";
+export type ServerState = "ok" | "retrying";
 let serverState: ServerState = "ok";
 const serverListeners = new Set<(s: ServerState) => void>();
 export function onServerState(fn: (s: ServerState) => void) {
@@ -57,31 +65,57 @@ export function onServerState(fn: (s: ServerState) => void) {
     serverListeners.delete(fn);
   };
 }
-let wakingCount = 0;
-function setWaking(on: boolean) {
-  wakingCount = Math.max(0, wakingCount + (on ? 1 : -1));
-  const next: ServerState = wakingCount > 0 ? "waking" : "ok";
+let retryingCount = 0;
+function setRetrying(on: boolean) {
+  retryingCount = Math.max(0, retryingCount + (on ? 1 : -1));
+  const next: ServerState = retryingCount > 0 ? "retrying" : "ok";
   if (next !== serverState) {
     serverState = next;
     serverListeners.forEach((fn) => fn(next));
   }
 }
 
-const RETRY_DELAYS_MS = [1000, 2000, 3000, 5000, 8000, 10000, 15000, 15000]; // ~59 s in total
+export const REQUEST_TIMEOUT_MS = 20000; // per attempt, until the response headers arrive
+const RETRY_BUDGET_MS = 60000; // no new attempt is started after this much time has passed
+const RETRY_DELAYS_MS = [1000, 2000, 3000, 5000, 8000, 10000, 15000, 15000];
 const TRANSIENT = new Set([502, 503, 504]);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// fetch with cold-start retries. Retries only: a network failure, 502/503/504, or 409 request_in_progress (the
-// server is still finishing the first copy of this idempotent request). Never retries a definite answer.
-export async function fetchWithWake(url: string, init: RequestInit, opts: { retry: boolean } = { retry: true }): Promise<Response> {
+// One fetch attempt that is aborted when no response headers arrive within timeoutMs. Reading the body afterwards
+// is not limited (large downloads may take longer).
+async function fetchOnce(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch {
+    throw new NetworkError(ctrl.signal.aborted
+      ? "The server did not respond in time. Please check your connection and try again."
+      : "Could not reach the CheckSphere server. Please check your internet connection and try again.");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// fetch with timeouts and retries. Retries only: a network failure or timeout, 502/503/504, or 409
+// request_in_progress (the server is still finishing the first copy of this idempotent request). Never retries a
+// definite answer. After the last attempt a network problem is thrown as NetworkError (status 0).
+export async function fetchWithWake(
+  url: string,
+  init: RequestInit,
+  opts: { retry?: boolean; timeoutMs?: number } = {},
+): Promise<Response> {
+  const retry = opts.retry ?? true;
+  const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const keyed = !!(init.headers as Record<string, string> | undefined)?.["Idempotency-Key"];
-  let waking = false;
+  const started = Date.now();
+  let retrying = false;
   try {
     for (let i = 0; ; i++) {
       let res: Response | null = null;
       let netErr: unknown = null;
       try {
-        res = await fetch(url, init);
+        res = await fetchOnce(url, init, timeoutMs);
       } catch (e) {
         netErr = e;
       }
@@ -90,18 +124,19 @@ export async function fetchWithWake(url: string, init: RequestInit, opts: { retr
         const body = await res.clone().json().catch(() => null);
         transient = body?.detail?.code === "request_in_progress";
       }
-      if (!transient || !opts.retry || i >= RETRY_DELAYS_MS.length) {
+      const outOfBudget = i >= RETRY_DELAYS_MS.length || Date.now() - started + RETRY_DELAYS_MS[i] > RETRY_BUDGET_MS;
+      if (!transient || !retry || outOfBudget) {
         if (netErr !== null) throw netErr;
         return res!;
       }
-      if (!waking) {
-        waking = true;
-        setWaking(true);
+      if (!retrying) {
+        retrying = true;
+        setRetrying(true);
       }
       await sleep(RETRY_DELAYS_MS[i]);
     }
   } finally {
-    if (waking) setWaking(false);
+    if (retrying) setRetrying(false);
   }
 }
 
@@ -181,9 +216,10 @@ export type DownloadProgress = { phase: "preparing" | "downloading"; loaded: num
 export async function downloadFile(path: string, filename: string, onProgress?: (p: DownloadProgress) => void) {
   const token = await tokenProvider();
   onProgress?.({ phase: "preparing", loaded: 0, total: null });
+  // the server builds the file before it answers, so allow longer than a normal API call for the first byte
   const res = await fetchWithWake(`${API_URL}/api${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+  }, { timeoutMs: 120000 });
   if (!res.ok) {
     let msg = "Download failed";
     try { const b = await res.json(); if (typeof b?.detail === "string") msg = b.detail; } catch { /* not JSON */ }

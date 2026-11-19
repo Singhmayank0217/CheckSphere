@@ -178,6 +178,14 @@ def main() -> int:
         record("agents register tokens (agent 1 on two phones)", ok)
         record("re-registering the same token is idempotent", post("/push/register", H1a, {"token": T1a}).ok
                and db.push_devices.count_documents({"token": T1a}) == 1)
+        before = db.push_devices.find_one({"token": T1a})["updated_at"]
+        burst = [post("/push/register", H1a, {"token": T1a}).status_code for _ in range(20)]
+        record("repeated identical registrations within a minute are acknowledged without a database write",
+               burst == [200] * 20 and db.push_devices.find_one({"token": T1a})["updated_at"] == before)
+        r = post("/push/register", H1a, {"token": T1a, "device_id": "phone-1a-new"})
+        record("changed device details are written even inside the throttle window",
+               r.ok and db.push_devices.find_one({"token": T1a}).get("device_id") == "phone-1a-new")
+        post("/push/register", H1a, {"token": T1a, "device_id": "phone-1a", "platform": "android"}).raise_for_status()
         devs = list(db.push_devices.find({}, {"user_id": 1, "token": 1}))
         record("each token bound to its own logged-in agent",
                {d["token"]: d["user_id"] for d in devs} == {T1a: ag1["id"], T1b: ag1["id"], T2: ag2["id"], T3: ag3["id"]})

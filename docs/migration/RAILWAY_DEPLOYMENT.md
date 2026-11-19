@@ -94,7 +94,7 @@ Optional:
 - **Not guaranteed:** the MongoDB driver keeps one monitoring socket open, and its TCP keep-alive packets may still count as outbound traffic. Whether the service actually sleeps has to be **measured on Railway** after the first deployment (watch the service's sleep indicator and the metrics).
 - There is deliberately **no keep-alive or self-ping** anywhere in the code.
 - **Cold start in the app:**
-  - Requests that hit a sleeping or starting server (network error, 502/503/504) are retried with backoff for about 60 s. Meanwhile a "Server is starting up…" banner shows on every screen.
+  - Each request attempt times out after 20 s without a response. A network error, timeout or 502/503/504 is retried with backoff for up to about 60 s. Meanwhile a banner shows on every screen: "No internet connection — retrying…" when the device is offline, otherwise "Cannot reach the CheckSphere server — retrying…".
   - Every POST carries an `Idempotency-Key`, so a retried case creation, allocation or submission returns the first result instead of creating a duplicate.
   - Photos always go through the on-device queue, keyed by `upload_id`.
 

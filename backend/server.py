@@ -56,6 +56,8 @@ INDEXES: dict[str, list[IndexModel]] = {
     "push_devices": [IndexModel([("token", ASCENDING)], name="token", unique=True),
                      IndexModel([("user_id", ASCENDING)], name="user_id"),
                      IndexModel([("session_id", ASCENDING)], name="session_id")],
+    # in-app notifications: every staff client polls GET /notifications (filter user_id, newest first)
+    "notifications": [IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created")],
     "push_outbox": [IndexModel([("dedupe_key", ASCENDING)], name="dedupe_key", unique=True),
                     IndexModel([("status", ASCENDING), ("created_at", ASCENDING)], name="status_created"),
                     IndexModel([("expires_at", ASCENDING)], name="expires_at", expireAfterSeconds=0)],
@@ -71,7 +73,7 @@ async def ensure_indexes() -> None:
                 logger.error("ensure_indexes(%s.%s): %s", collection, model.document["name"], exc)
 
 
-SERVER_BUILD = "2026-11-18.r2-railway-v1"  # shown on the app's login screen; bump on each backend release
+SERVER_BUILD = "2026-11-19.stability-v1"  # shown on the app's login screen; bump on each backend release
 
 app = FastAPI(title="CheckSphere API")
 

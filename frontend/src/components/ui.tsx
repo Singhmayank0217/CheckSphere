@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useNetInfo } from "@react-native-community/netinfo";
 import { useRouter } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
@@ -42,18 +43,25 @@ export function ToastHost() {
   );
 }
 
-// ---------------------------------------------------------------- Server wake-up banner
-// Shown while requests are being retried because the server is starting (Railway Serverless cold start).
+// ---------------------------------------------------------------- Connection banner
+// Shown while requests are being retried after a network failure, timeout or 502/503/504. It says whether this
+// device has no internet connection or the server is not answering.
 export function ServerWakeBanner() {
   const [state, setState] = useState<ServerState>("ok");
+  const net = useNetInfo();
   const insets = useSafeAreaInsets();
   const styles = useStyles();
   useEffect(() => onServerState(setState), []);
-  if (state !== "waking") return null;
+  if (state !== "retrying") return null;
+  const offline = net.isConnected === false || net.isInternetReachable === false;
   return (
-    <View pointerEvents="none" style={[styles.wake, { top: insets.top + 8 }]} testID="server-waking-banner">
+    <View pointerEvents="none" style={[styles.wake, { top: insets.top + 8 }]} testID={offline ? "offline-banner" : "server-retry-banner"}>
       <ActivityIndicator size="small" color="#fff" />
-      <Text style={styles.wakeText}>Server is starting up — please wait, this can take up to a minute…</Text>
+      <Text style={styles.wakeText}>
+        {offline
+          ? "No internet connection — retrying. Your entries stay saved on this device."
+          : "Cannot reach the CheckSphere server — retrying…"}
+      </Text>
     </View>
   );
 }

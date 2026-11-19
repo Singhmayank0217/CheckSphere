@@ -44,7 +44,7 @@ The figures below are from the providers' public pricing as known on 18-Nov-2026
 - **RAM:** set `IMAGE_CACHE_MB=48` and `REPORT_CACHE_MB=32`. The defaults (200 + 150 MB) could exceed 0.5 GB with image processing and cause out-of-memory restarts.
 
 **When the Railway allowance is exhausted:**
-- The API becomes unreachable. The app shows "Server is starting up…", then a connection error after about 60 s of retries.
+- The API becomes unreachable. The app shows "Cannot reach the CheckSphere server — retrying…", then a connection error after about 60 s of retries.
 - **No upload is silently lost.**
   - Photos stay in the phone's private queue, under the same `upload_id`, until the server confirms them.
   - Drafts stay on the device.
