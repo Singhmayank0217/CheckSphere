@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/src/api";
 import { TextField } from "@/src/components/fields";
-import { Banner, Btn, PopupModal, showToast } from "@/src/components/ui";
+import { Banner, Btn, ErrorBox, PopupModal, showToast } from "@/src/components/ui";
 import { DataTable } from "@/src/portal/DataTable";
 import { Page } from "@/src/portal/Page";
 import { PageHeader } from "@/src/portal/Shell";
@@ -80,7 +80,13 @@ export default function UsersPage({ roles, readOnly = false }: { roles: ("agent"
         )) : null}
         <View style={{ width: 320 }}><TextField label="Search name, ID, email or mobile" value={q} onChange={(v) => { setQ(v); setPage(1); }} testID="users-search-input" /></View>
       </View>
-      <DataTable
+      {usersQ.isError ? (
+        <ErrorBox
+          message={`Could not load ${titles[role]?.toLowerCase() ?? "users"}: ${(usersQ.error as any)?.message ?? "request failed"}`}
+          onRetry={() => usersQ.refetch()}
+          testID="users-load-error"
+        />
+      ) : <DataTable
         testID="users-table"
         rows={rows}
         loading={usersQ.isLoading}
@@ -98,7 +104,7 @@ export default function UsersPage({ roles, readOnly = false }: { roles: ("agent"
             return <Text style={styles.cell}>{n ? `${n} scope rules` : "All cases (no scope set)"}</Text>;
           } }] : []),
         ]}
-      />
+      />}
 
       <PopupModal visible={createOpen} title={`Create ${titles[role].slice(0, -1)}`} onClose={() => setCreateOpen(false)}>
         <TextField label="Full name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} testID="create-name-input" />

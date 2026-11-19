@@ -3,7 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { AppState } from "react-native";
 
-import { api, setOnUnauthorized, setTokenProvider } from "@/src/api";
+import { api, ApiError, setOnUnauthorized, setTokenProvider } from "@/src/api";
 import { onPushTokenChange, registerForPush, unregisterPush } from "@/src/utils/push";
 import { storage } from "@/src/utils/storage";
 
@@ -60,10 +60,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         try {
           const me = await api<{ user: SessionUser }>("/auth/me");
           setUser(me.user);
+          await storage.setItem("auth_user", JSON.stringify(me.user));
           pushLater(me.user);
-        } catch {
-          await storage.secureRemove("auth_token");
-          await storage.removeItem("auth_user");
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) {
+            // the session really is expired or revoked
+            await storage.secureRemove("auth_token");
+            await storage.removeItem("auth_user");
+          } else {
+            // No connection, timeout or a server error: keep the session and continue with the saved profile.
+            // Any later request that the server answers with 401 still signs the user out.
+            const cached = await storage.getItem<string | null>("auth_user", null);
+            try {
+              const u = cached ? (JSON.parse(cached) as SessionUser) : null;
+              if (u?.id && u.role) setUser(u);
+            } catch {
+              // unreadable cache: the user signs in again, the saved token is replaced then
+            }
+          }
         }
       }
       setReady(true);

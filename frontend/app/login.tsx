@@ -24,7 +24,7 @@ export default function Login() {
   const [error, setError] = useState("");
   const [serverBuild, setServerBuild] = useState<string>("checking…");
   useEffect(() => {
-    // fetchWithWake: a sleeping server is woken by this probe and the "starting up" banner shows meanwhile
+    // fetchWithWake: retried on a network problem, with the connection banner shown meanwhile
     fetchWithWake(`${API_URL}/health`, {}).then((r) => r.json()).then((j) => setServerBuild(j?.build ?? "old server (no build id)"))
       .catch(() => setServerBuild("unreachable"));
   }, []);

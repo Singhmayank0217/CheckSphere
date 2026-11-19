@@ -44,9 +44,25 @@ export async function ensurePushChannel() {
 
 export type PushResult = "registered" | "skipped" | "denied" | "failed";
 
+// Loop guard. On Android, every getDevicePushTokenAsync() call (also made inside getExpoPushTokenAsync) emits the
+// "push token changed" event, even when the token did not change. The token listener below must therefore ignore
+// tokens this module fetched itself, or registering would trigger itself forever. Registrations are also
+// single-flight: concurrent callers share the one in progress.
+let knownDeviceToken: string | null = null;
+let inFlight: { userId: string; promise: Promise<PushResult> } | null = null;
+
 /** Register this phone for assignment pushes. Agents on Android only; safe to call repeatedly. */
-export async function registerForPush(user: { id: string; role: string } | null): Promise<PushResult> {
-  if (Platform.OS !== "android" || !user || user.role !== "agent") return "skipped";
+export function registerForPush(user: { id: string; role: string } | null): Promise<PushResult> {
+  if (Platform.OS !== "android" || !user || user.role !== "agent") return Promise.resolve("skipped");
+  if (inFlight && inFlight.userId === user.id) return inFlight.promise;
+  const promise = doRegister(user).finally(() => {
+    if (inFlight?.promise === promise) inFlight = null;
+  });
+  inFlight = { userId: user.id, promise };
+  return promise;
+}
+
+async function doRegister(user: { id: string; role: string }): Promise<PushResult> {
   const pid = projectId();
   if (!pid) return "failed";
   try {
@@ -54,7 +70,10 @@ export async function registerForPush(user: { id: string; role: string } | null)
     let perm = await Notifications.getPermissionsAsync();
     if (!perm.granted && perm.canAskAgain) perm = await Notifications.requestPermissionsAsync();
     if (!perm.granted) return "denied";
-    const token = (await Notifications.getExpoPushTokenAsync({ projectId: pid })).data;
+    const device = await Notifications.getDevicePushTokenAsync();
+    knownDeviceToken = typeof device.data === "string" ? device.data : null;
+    // pass the device token in, so the Expo token lookup does not fetch (and emit) it a second time
+    const token = (await Notifications.getExpoPushTokenAsync({ projectId: pid, devicePushToken: device })).data;
     const previous = await readRegistration();
     await api("/push/register", {
       method: "POST",
@@ -79,6 +98,7 @@ export async function registerForPush(user: { id: string; role: string } | null)
 export async function unregisterPush(): Promise<void> {
   const reg = await readRegistration();
   await storage.removeItem(REG_KEY);
+  inFlight = null;
   if (!reg) return;
   try {
     await api("/push/unregister", { method: "POST", body: { token: reg.token } });
@@ -90,7 +110,9 @@ export async function unregisterPush(): Promise<void> {
 /** Re-register when Android rotates the device (FCM) token. Returns an unsubscribe function. */
 export function onPushTokenChange(user: { id: string; role: string } | null): () => void {
   if (Platform.OS !== "android" || !user || user.role !== "agent") return () => {};
-  const sub = Notifications.addPushTokenListener(() => {
+  const sub = Notifications.addPushTokenListener((device) => {
+    // Ignore the event our own token fetch just emitted (same token), and any event while a registration runs.
+    if (inFlight || (typeof device?.data === "string" && device.data === knownDeviceToken)) return;
     registerForPush(user).catch(() => null);
   });
   return () => sub.remove();
