@@ -4,7 +4,23 @@ import * as Crypto from "expo-crypto";
 
 import { storage } from "@/src/utils/storage";
 
-export const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "";
+// The backend origin, e.g. "https://checksphere-production.up.railway.app". Expo bakes EXPO_PUBLIC_BACKEND_URL into
+// the bundle at build time, so a value saved without "https://" (or with a trailing slash) would otherwise make every
+// request relative to the dashboard's own site. http:// is kept as given (localhost / LAN development builds).
+export function normalizeBackendUrl(raw: string | undefined | null): string {
+  let v = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!v) return "";
+  const scheme = /^(https?):\/*/i.exec(v); // "https://x", and malformed "https:/x" or "https:x"
+  if (scheme) {
+    const rest = v.slice(scheme[0].length);
+    return rest ? `${scheme[1].toLowerCase()}://${rest}` : "";
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return v; // some other explicit scheme: leave it alone
+  v = v.replace(/^\/+/, ""); // protocol-relative "//host"
+  return v ? `https://${v}` : "";
+}
+
+export const API_URL = normalizeBackendUrl(process.env.EXPO_PUBLIC_BACKEND_URL);
 
 let tokenProvider: () => Promise<string | null> = () => storage.secureGet("auth_token", null);
 let onUnauthorized: (() => void) | null = null;
