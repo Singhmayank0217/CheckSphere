@@ -124,8 +124,8 @@ async def create_case(body: CaseCreate, request: Request, ctx=Depends(security.a
             agent = None
         if not agent:
             raise HTTPException(400, "Agent not found or inactive")
-        if scope.get("agent_ids") and str(agent["_id"]) not in scope["agent_ids"]:
-            raise HTTPException(403, "This agent is outside your supervision scope")
+        # Business rule: a supervisor may assign a new case to ANY active agent, across all regions and teams
+        # (the supervisor's agent_ids scope does not limit who can receive work), exactly as /cases/{id}/assign.
     if body.report_type not in REPORT_TYPES:
         raise HTTPException(400, "Unknown report type")
     if not (body.primary_phone or "").strip():
@@ -159,8 +159,11 @@ async def create_case(body: CaseCreate, request: Request, ctx=Depends(security.a
     if agent:
         await core.audit(u, "case_assigned", "case", str(res.inserted_id), {"agent": agent["name"]}, request)
         from requests_routes import notify
-        await notify(str(agent["_id"]), "New case assigned",
-                     f"{doc['internal_case_id']} · {doc.get('applicant_name')} · {doc.get('client_name')}", str(res.inserted_id), "assignment")
+        import push_service
+        nid = await notify(str(agent["_id"]), "New case assigned",
+                           f"Case {doc['internal_case_id']} has been assigned to you.", str(res.inserted_id), "assignment")
+        await push_service.queue_assignment_push("case_assigned", str(res.inserted_id), str(agent["_id"]),
+                                                 doc["assigned_at"].isoformat(), nid)
     return core.clean(await core.db.cases.find_one({"_id": res.inserted_id}))
 
 
@@ -382,11 +385,13 @@ async def assign_case(case_id: str, body: AssignIn, request: Request, ctx=Depend
         agent = await core.db.users.find_one({"agent_id": body.agent_id.upper(), "role": "agent"})
     if not agent or agent.get("disabled"):
         raise HTTPException(400, "Agent not found or inactive")
-    reassign = bool(case.get("assigned_agent_id"))
+    previous_agent_id = case.get("assigned_agent_id")
+    reassign = bool(previous_agent_id)
+    assigned_now = core.now()
     updates = {
         "assigned_agent_id": str(agent["_id"]), "assigned_agent_name": agent.get("name"),
         "status": "assigned" if case.get("status") in ("new", "assigned", "returned") else case["status"],
-        "updated_at": core.now(),
+        "updated_at": assigned_now, "last_assignment_at": assigned_now,
     }
     await core.db.cases.update_one({"_id": case["_id"]}, {"$set": updates, "$push": {
         "timeline": tl("reassigned" if reassign else "assigned", ctx["user"],
@@ -394,9 +399,15 @@ async def assign_case(case_id: str, body: AssignIn, request: Request, ctx=Depend
     await core.audit(ctx["user"], "case_reassigned" if reassign else "case_assigned", "case", str(case["_id"]),
                      {"agent": agent["name"]}, request)
     from requests_routes import notify
-    await notify(str(agent["_id"]), "Case reassigned to you" if reassign else "New case assigned",
-                 f"{case['internal_case_id']} · {case.get('applicant_name')} · {case.get('client_name')}", str(case["_id"]), "assignment")
+    import push_service
+    nid = await notify(str(agent["_id"]), "Case reassigned to you" if reassign else "New case assigned",
+                       f"Case {case['internal_case_id']} has been {'reassigned' if reassign else 'assigned'} to you.",
+                       str(case["_id"]), "assignment")
     await core.db.cases.update_one({"_id": case["_id"]}, {"$set": {"agent_response": None}})
+    # Remote push only when the case actually goes to a different agent; the previous agent is never notified.
+    if previous_agent_id != str(agent["_id"]):
+        await push_service.queue_assignment_push("case_reassigned" if reassign else "case_assigned", str(case["_id"]),
+                                                 str(agent["_id"]), assigned_now.isoformat(), nid)
     return core.clean(await core.db.cases.find_one({"_id": case["_id"]}))
 
 

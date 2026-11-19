@@ -21,6 +21,7 @@ import audit_routes
 import ops_routes
 import requests_routes
 import case_uploads_routes
+import push_routes
 import background
 import idempotency
 from seed import seed_if_empty
@@ -51,6 +52,13 @@ INDEXES: dict[str, list[IndexModel]] = {
     "pending_uploads": [IndexModel([("upload_id", ASCENDING)], name="upload_id", unique=True),
                         IndexModel([("expires_at", ASCENDING)], name="expires_at", expireAfterSeconds=0)],
     "idempotency_keys": [IndexModel([("expires_at", ASCENDING)], name="expires_at", expireAfterSeconds=0)],
+    # remote push: one row per device token (owner = logged-in agent + session); outbox = one row per push, deduplicated
+    "push_devices": [IndexModel([("token", ASCENDING)], name="token", unique=True),
+                     IndexModel([("user_id", ASCENDING)], name="user_id"),
+                     IndexModel([("session_id", ASCENDING)], name="session_id")],
+    "push_outbox": [IndexModel([("dedupe_key", ASCENDING)], name="dedupe_key", unique=True),
+                    IndexModel([("status", ASCENDING), ("created_at", ASCENDING)], name="status_created"),
+                    IndexModel([("expires_at", ASCENDING)], name="expires_at", expireAfterSeconds=0)],
 }
 
 
@@ -101,7 +109,7 @@ async def health_ready():
 
 api_router = APIRouter(prefix="/api")
 for module in (auth_routes, admin_routes, cases_routes, reports_routes, evidence_routes,
-               dashboard_routes, export_routes, audit_routes, ops_routes, requests_routes, case_uploads_routes):
+               dashboard_routes, export_routes, audit_routes, ops_routes, requests_routes, case_uploads_routes, push_routes):
     api_router.include_router(module.router)
 app.include_router(api_router)
 

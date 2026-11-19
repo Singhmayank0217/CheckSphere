@@ -8,8 +8,20 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { api } from "@/src/api";
 import { AgentMenuButton } from "@/src/components/AgentMenu";
-import { showNewPhoneAlerts } from "@/src/utils/phoneAlerts";
+import { markPhoneAlertsSeen, showNewPhoneAlerts } from "@/src/utils/phoneAlerts";
 import { makeStyles, spacing, typography, useTheme } from "@/src/theme";
+
+// Each tapped notification opens its case once, even when several screens with this bar are mounted.
+let lastOpenedNotification: string | null = null;
+function openFromNotification(r: Notifications.NotificationResponse, router: ReturnType<typeof useRouter>) {
+  const key = r.notification.request.identifier;
+  if (key === lastOpenedNotification) return;
+  lastOpenedNotification = key;
+  const data = r.notification.request.content.data ?? {};
+  markPhoneAlertsSeen([data.notification_id as string | undefined]).catch(() => null);
+  const caseId = data.case_id as string | undefined;
+  router.push(caseId ? `/case/${caseId}` : "/notifications");
+}
 
 export function useAgentNotifications() {
   const router = useRouter();
@@ -19,12 +31,14 @@ export function useAgentNotifications() {
   }, [q.data]);
   useEffect(() => {
     if (Platform.OS === "web") return;
-    const sub = Notifications.addNotificationResponseReceivedListener((r) => {
-      const caseId = r.notification.request.content.data?.case_id as string | undefined;
-      router.push(caseId ? `/case/${caseId}` : "/notifications");
-    });
+    const sub = Notifications.addNotificationResponseReceivedListener((r) => openFromNotification(r, router));
     return () => sub.remove();
   }, [router]);
+  // A notification tapped while the app was closed opens the app first; it is handled here (once).
+  const last = Notifications.useLastNotificationResponse();
+  useEffect(() => {
+    if (Platform.OS !== "web" && last) openFromNotification(last, router);
+  }, [last, router]);
   return q;
 }
 

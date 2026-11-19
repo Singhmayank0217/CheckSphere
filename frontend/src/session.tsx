@@ -4,7 +4,14 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { AppState } from "react-native";
 
 import { api, setOnUnauthorized, setTokenProvider } from "@/src/api";
+import { onPushTokenChange, registerForPush, unregisterPush } from "@/src/utils/push";
 import { storage } from "@/src/utils/storage";
+
+// Push registration is best effort and must never block sign-in or sign-out.
+const pushLater = (u: SessionUser | null) => {
+  registerForPush(u).catch(() => null);
+};
+const withinMs = <T,>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<void>((r) => setTimeout(r, ms))]);
 
 export type SessionUser = {
   id: string;
@@ -53,6 +60,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         try {
           const me = await api<{ user: SessionUser }>("/auth/me");
           setUser(me.user);
+          pushLater(me.user);
         } catch {
           await storage.secureRemove("auth_token");
           await storage.removeItem("auth_user");
@@ -68,12 +76,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     await storage.setItem("auth_user", JSON.stringify(data.user));
     setToken(data.access_token);
     setUser(data.user);
+    if (!data.user.must_change_password) pushLater(data.user); // otherwise registered after the password change (refresh)
   }, []);
 
   const signingOut = useRef(false);
   const signOut = useCallback(async () => {
     if (signingOut.current) return;
     signingOut.current = true;
+    await withinMs(unregisterPush(), 5000); // stop pushes to this phone (the backend also drops them on logout)
     try {
       await api("/auth/logout", { method: "POST" });
     } catch {
@@ -129,7 +139,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const me = await api<{ user: SessionUser }>("/auth/me");
     setUser(me.user);
     await storage.setItem("auth_user", JSON.stringify(me.user));
+    if (!me.user.must_change_password) pushLater(me.user);
   }, []);
+
+  // Re-register when Android rotates this phone's push token.
+  useEffect(() => onPushTokenChange(user), [user]);
 
   // Keep AsyncStorage web shim clean (unused warm-up to surface quota errors early)
   useEffect(() => {

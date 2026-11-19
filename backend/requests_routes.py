@@ -27,9 +27,14 @@ FIELDS = ["request_type", "applicant_name", "co_applicant_name", "seller_name", 
           "branch_name", "bank_state", "full_address", "pincode", "verification_state", "city", "notes", "priority", "supervisor_id"]
 
 
-async def notify(user_id: str, title: str, body: str, case_id: str | None = None, kind: str = "info"):
-    await core.db.notifications.insert_one({"user_id": user_id, "title": title, "body": body, "case_id": case_id, "kind": kind,
-                                            "created_at": core.now(), "delivered_at": None, "acknowledged_at": None})
+async def notify(user_id: str, title: str, body: str, case_id: str | None = None, kind: str = "info") -> str:
+    """In-app notification (also shown as a local phone alert by the app). Returns its id.
+    Keep titles/bodies free of applicant names, addresses, phone numbers and bank details: the phone may show them on
+    the lock screen. Use the internal case id (e.g. CSV-000015) to identify a case."""
+    res = await core.db.notifications.insert_one({"user_id": user_id, "title": title, "body": body, "case_id": case_id,
+                                                  "kind": kind, "created_at": core.now(), "delivered_at": None,
+                                                  "acknowledged_at": None})
+    return str(res.inserted_id)
 
 
 async def notify_role(role: str, title: str, body: str, case_id: str | None = None, kind: str = "alert"):
@@ -223,6 +228,7 @@ async def request_action(rid: str, body: ActionIn, request: Request, ctx=Depends
         raise HTTPException(400, f"Request is already {r['status']}")
     now = core.now()
     sets, ev = {"updated_at": now}, body.action
+    push_after = None
     if body.action == "edit":
         changes = {k: str(v).strip() for k, v in (body.data or {}).items() if k in FIELDS and str(v).strip() != (r.get(k) or "")}
         sets.update(changes)
@@ -237,7 +243,9 @@ async def request_action(rid: str, body: ActionIn, request: Request, ctx=Depends
             await notify_role("super_admin", "Case request escalated", f"{u['name']} escalated a request", None, "request")
         hist = tl(f"request_{body.action}", u, {"comment": body.comment})
         if body.action in ("reject", "clarify", "duplicate"):
-            await notify(r["requested_by"], f"Request {sets['status']}", body.comment or "See request details", None, "request")
+            # the comment itself stays in the request's comments; the notification only points to it
+            await notify(r["requested_by"], f"Request {sets['status']}", "Open the request in CheckSphere to see the details.",
+                         None, "request")
     elif body.action == "approve":
         changes = {k: str(v).strip() for k, v in (body.data or {}).items() if k in FIELDS and k != "supervisor_id"}
         if changes:
@@ -264,7 +272,11 @@ async def request_action(rid: str, body: ActionIn, request: Request, ctx=Depends
         sets.update({"status": "assigned", "case_id": str(res.inserted_id), "internal_case_id": case["internal_case_id"], "approved_by": u["name"],
                      "approved_at": now, "allocated_at": now, "assigned_agent_id": str(agent["_id"]), "assigned_agent_name": agent["name"]})
         hist = tl("request_approved_allocated", u, {"case": case["internal_case_id"], "agent": agent["name"]})
-        await notify(str(agent["_id"]), "New case assigned", f"{case['internal_case_id']} · {case['applicant_name']} · due {due:%d %b %H:%M}", str(res.inserted_id), "assignment")
+        nid = await notify(str(agent["_id"]), "New case assigned",
+                           f"Case {case['internal_case_id']} has been assigned to you · due {due:%d %b %H:%M}",
+                           str(res.inserted_id), "assignment")
+        # remote push is queued only after the request below has been saved too
+        push_after = ("case_assigned", str(res.inserted_id), str(agent["_id"]), now.isoformat(), nid)
         if r["requested_by"] != str(agent["_id"]):
             await notify(r["requested_by"], "Your request was approved", f"Allocated to {agent['name']} as {case['internal_case_id']}", None, "request")
     else:
@@ -274,6 +286,9 @@ async def request_action(rid: str, body: ActionIn, request: Request, ctx=Depends
         await core.db.case_requests.update_one({"_id": r["_id"]}, {"$push": {"comments": sets_comment}})
     await core.db.case_requests.update_one({"_id": r["_id"]}, {"$set": sets, "$push": {"history": hist}})
     await core.audit(u, f"case_request_{ev}", "case_request", rid, {"comment": body.comment}, request)
+    if push_after:
+        import push_service
+        await push_service.queue_assignment_push(*push_after)
     return {"ok": True, "status": sets.get("status")}
 
 
@@ -358,7 +373,9 @@ async def agent_response(case_id: str, body: AgentResp, request: Request, ctx=De
                                                         "$push": {"timeline": tl(act, ctx["user"], {"reason": body.reason})}})
     await core.audit(ctx["user"], act, "case", case_id, {"reason": body.reason}, request)
     if body.response == "reassign":
-        await notify_case_supervisors(case, "Reassignment requested", f"{ctx['user']['name']}: {case['internal_case_id']} — {body.reason}")
+        # the agent's reason is kept on the case (agent_response_reason); the notification only names the case
+        await notify_case_supervisors(case, "Reassignment requested",
+                                      f"{ctx['user']['name']} asked to reassign case {case['internal_case_id']}.")
     return {"ok": True}
 
 
@@ -368,13 +385,14 @@ async def pending_alert_pass():
     now = core.now()
     q = {"status": {"$in": core.ACTIVE_STATUSES}, **core.LIVE_CASE_FILTER}
     async for c in core.db.cases.find({**q, "updated_at": {"$lt": now - timedelta(hours=24)}, "alert_24h_at": None}):
-        body = f"{c['internal_case_id']} · {c.get('applicant_name')} pending more than 24 hours"
+        body = f"Case {c['internal_case_id']} has been pending for more than 24 hours."
         if c.get("assigned_agent_id"):
             await notify(c["assigned_agent_id"], "Case pending > 24h", body, str(c["_id"]), "alert")
         await notify_case_supervisors(c, "Case pending > 24h", body)
         await core.db.cases.update_one({"_id": c["_id"]}, {"$set": {"alert_24h_at": now}})
     async for c in core.db.cases.find({**q, "updated_at": {"$lt": now - timedelta(hours=48)}, "alert_48h_at": None}):
-        await notify_role("super_admin", "Case pending > 48h", f"{c['internal_case_id']} · {c.get('applicant_name')} pending more than 48 hours", str(c["_id"]))
+        await notify_role("super_admin", "Case pending > 48h", f"Case {c['internal_case_id']} has been pending for more than 48 hours.",
+                          str(c["_id"]))
         await core.db.cases.update_one({"_id": c["_id"]}, {"$set": {"alert_48h_at": now}})
     rq = {"status": {"$in": ["sent_for_allocation", "under_review", "clarification"]}}
     async for r in core.db.case_requests.find({**rq, "submitted_at": {"$lt": now - timedelta(hours=24)}, "alert_24h_at": None}):

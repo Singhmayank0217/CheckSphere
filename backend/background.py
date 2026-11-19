@@ -14,6 +14,7 @@ from contextlib import suppress
 import core
 import geocoding
 import ops_routes
+import push_service
 import requests_routes
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ JOBS = {
     "backup": (3600, ops_routes.backup_if_due),
     "alerts": (300, requests_routes.pending_alert_pass),
     "geocode": (60, geocoding.geocode_pass),
+    "push": (60, push_service.push_pass),  # retries failed push sends, reads delivery receipts (no-op when push is off)
 }
 _tasks: dict[str, asyncio.Task] = {}
 _last: dict[str, float] = {}
@@ -35,6 +37,8 @@ def start() -> None:
     _tasks["backup"] = asyncio.create_task(ops_routes.daily_backup_loop())
     _tasks["alerts"] = asyncio.create_task(requests_routes.pending_alert_loop())
     _tasks["geocode"] = asyncio.create_task(geocoding.geocode_loop())
+    if push_service.ENABLED:
+        _tasks["push"] = asyncio.create_task(push_service.push_loop())
 
 
 async def _run(name: str, fn) -> None:

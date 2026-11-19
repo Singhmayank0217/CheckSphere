@@ -295,7 +295,10 @@ def main() -> int:
         record("supervisor can view the case and its status", requests.get(f"{base}/cases/{sc_case.get('id')}", headers=H(ssup), timeout=30).json().get("status") == "assigned")
         record("supervisor must pick an agent", requests.post(f"{base}/cases", headers=H(sup), json={**body, "agent_id": None, "client_case_id": "X1"}, timeout=30).status_code == 400)
         record("scoped supervisor: client outside scope -> 403", requests.post(f"{base}/cases", headers=H(ssup), json={**body, "client_id": c_out["id"], "client_case_id": "X2"}, timeout=30).status_code == 403)
-        record("scoped supervisor: agent outside scope -> 403", requests.post(f"{base}/cases", headers=H(ssup), json={**body, "agent_id": a2u["id"], "client_case_id": "X3"}, timeout=30).status_code == 403)
+        # business rule (19-Nov-2026): supervisors may create cases for ANY active agent, whatever their agent_ids scope
+        x3 = requests.post(f"{base}/cases", headers=H(ssup), json={**body, "agent_id": a2u["id"], "client_case_id": "X3"}, timeout=30)
+        record("scoped supervisor: agent outside agent_ids scope -> allowed, assigned to that agent",
+               x3.ok and x3.json().get("assigned_agent_id") == a2u["id"], f"HTTP {x3.status_code}")
         record("agent cannot create cases via supervisor API (403)", requests.post(f"{base}/cases", headers=H(a1), json={**body, "client_case_id": "X4"}, timeout=30).status_code == 403)
         record("agent cannot use supervisor-only functions (approve request / list users)",
                requests.post(f"{base}/requests/{rid}/action", headers=H(a1), json={"action": "review"}, timeout=30).status_code == 403

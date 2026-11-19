@@ -125,8 +125,7 @@ async def create_upload(request: Request, file: UploadFile = File(...), state: s
     async for sup in core.db.users.find({"role": "supervisor", "disabled": {"$ne": True}}):
         st = (sup.get("scope") or {}).get("states")
         if not st or clean["state"] in st:
-            await notify(str(sup["_id"]), "New uploaded case", f"{u['name']} uploaded a case for {clean['applicant_name']} ({clean['state']})",
-                         None, "request")
+            await notify(str(sup["_id"]), "New uploaded case", f"{u['name']} uploaded a new case for review.", None, "request")
     return _public(doc)
 
 
@@ -182,5 +181,7 @@ async def upload_action(uid: str, body: UploadActionIn, request: Request, ctx=De
     await core.db.case_uploads.update_one({"_id": d["_id"]}, upd)
     await core.audit(u, f"case_upload_{body.action}", "case_upload", uid, {"comment": body.comment}, request)
     from requests_routes import notify
-    await notify(d["submitted_by"], f"Uploaded case {STATUS_LABELS[new_status].lower()}", body.comment or d["applicant_name"], None, "request")
+    # any comment is kept in the upload's comments; the notification only points to it (no applicant details)
+    await notify(d["submitted_by"], f"Uploaded case {STATUS_LABELS[new_status].lower()}",
+                 "Open your uploaded cases in CheckSphere to see the details.", None, "request")
     return _public(await core.db.case_uploads.find_one({"_id": d["_id"]}))

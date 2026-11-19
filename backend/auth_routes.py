@@ -96,6 +96,8 @@ async def change_password(body: ChangePasswordIn, request: Request, ctx=Depends(
 @router.post("/auth/logout")
 async def logout(request: Request, ctx=Depends(security.auth_ctx)):
     await core.db.sessions.update_one({"_id": ctx["session"]["_id"]}, {"$set": {"revoked_at": core.now()}})
+    # this phone must stop receiving pushes for this account (pushes also skip any revoked session)
+    await core.db.push_devices.delete_many({"session_id": ctx["session"]["_id"]})
     await core.audit(ctx["user"], "logout", "user", str(ctx["user"]["_id"]), {}, request)
     return {"ok": True}
 
