@@ -4,6 +4,7 @@ import { Stack } from "expo-router";
 import { LogBox, Platform, StyleSheet } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
+import { Analytics } from "@vercel/analytics/react";
 
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { ServerWakeBanner, ToastHost } from "@/src/components/ui";
@@ -33,6 +34,7 @@ export default function RootLayout() {
           </KeyboardProvider>
         </QueryClientProvider>
       </ErrorBoundary>
+      {Platform.OS === "web" && <Analytics />}
     </GestureHandlerRootView>
   );
 }
